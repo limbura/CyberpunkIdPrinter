@@ -7,7 +7,7 @@ jobs:
     strategy:
       matrix:
         os: [ubuntu-latest, windows-latest]
-        python: ['3.11', '3.12', '3.13']
+        python: ['3.11', '3.12', '3.13', '3.14']
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -17,7 +17,14 @@ jobs:
       - run: python -m pip install .
       - run: python -m unittest discover -s tests -v
   protocol:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python: ['3.11', '3.12', '3.13', '3.14']
+    runs-on: ${{ matrix.os }}
+    env:
+      CYBERWALL_TIMINI_PATH: ${{ github.workspace }}/TiMini-Print
     steps:
       - uses: actions/checkout@v4
         with:
@@ -29,8 +36,10 @@ jobs:
           path: TiMini-Print
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
-      - run: python -m pip install './CyberpunkIdPrinter[printer]'
+          python-version: ${{ matrix.python }}
+      # Reproduce the user installation; dependencies must have wheels so a
+      # runner's preinstalled compiler cannot hide accidental source builds.
+      - run: python -m pip install --only-binary=:all: -e './CyberpunkIdPrinter[printer]'
+      - run: python -m pip check
+      - run: python -m cyberwall_id_printer check-backend
       - run: python -m unittest discover -s CyberpunkIdPrinter/tests -v
-        env:
-          CYBERWALL_TIMINI_PATH: ${{ github.workspace }}/TiMini-Print

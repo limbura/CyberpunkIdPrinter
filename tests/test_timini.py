@@ -44,3 +44,48 @@ class TiMiniTests(unittest.TestCase):
         job = encode_job(device,None,image,media)
         self.assertTrue(job.payload or job.steps)
         self.assertFalse(caps.calibration)
+
+    def test_ble_dependencies_import_without_winsdk(self):
+        import importlib
+        import sys
+        from importlib.metadata import requires
+        from cyberwall_id_printer.backends.timini import _imports
+        # Verify package metadata as well as the actual platform BLE imports.
+        self.assertFalse(any(r.lower().startswith("winsdk")
+                             for r in requires("cyberwall_id_printer")))
+        _imports(None)
+        from bleak import BleakClient, BleakScanner
+        self.assertTrue(callable(BleakClient))
+        self.assertTrue(callable(BleakScanner))
+        if sys.platform == "win32":
+            importlib.import_module("bleak.backends.winrt.client")
+            importlib.import_module("bleak.backends.winrt.scanner")
+        self.assertFalse(any(n == "winsdk" or n.startswith("winsdk.") for n in sys.modules))
+
+    def test_scan_and_connection_plan_never_use_classic(self):
+        import asyncio
+        from unittest.mock import Mock
+        from cyberwall_id_printer import TiMiniBackend
+        from timiniprint.devices import bluetooth_connection_plan
+        from timiniprint.transport.bluetooth import BluetoothDiscovery, DeviceTransport
+        from timiniprint.transport.bluetooth.types import DeviceInfo
+        from timiniprint.devices.device import BluetoothEndpointTransport
+
+        address = "AA:BB:CC:DD:EE:FF"
+        endpoint = DeviceInfo(name="MX10", address=address, transport=DeviceTransport.BLE)
+        ble = Mock()
+        ble.scan_blocking.return_value = [endpoint]
+
+        async def scenario():
+            found = await TiMiniBackend().scan()
+            self.assertTrue(any(d["address"] == address for d in found))
+            device = await BluetoothDiscovery(self.catalog).resolve_device(address, DeviceTransport.BLE)
+            attempts = bluetooth_connection_plan(device).attempts
+            self.assertTrue(attempts)
+            self.assertTrue(all(a.endpoint.transport == BluetoothEndpointTransport.BLE for a in attempts))
+
+        with patch("timiniprint.transport.bluetooth.backend._get_classic_adapter",
+                   side_effect=AssertionError("Classic must not be used")) as classic, \
+             patch("timiniprint.transport.bluetooth.backend._get_ble_adapter", return_value=ble):
+            asyncio.run(scenario())
+            classic.assert_not_called()
