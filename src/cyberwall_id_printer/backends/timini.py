@@ -97,7 +97,7 @@ def encode_job(device, runtime_capabilities, image: Image.Image, media: MediaCon
 
 class TiMiniBackend:
     def __init__(self, path: str | Path | None = None, *, blackening: int = 3,
-                 timeout: float = 5.0):
+                 timeout: float = 15.0):
         from math import isfinite
         if isinstance(blackening, bool) or not isinstance(blackening, int) or not 1 <= blackening <= 5:
             raise ValueError("blackening must be an integer from 1 to 5")
@@ -114,8 +114,17 @@ class TiMiniBackend:
     async def connect(self, address: str) -> PrinterCapabilities:
         if self._connected is not None:
             raise RuntimeError("Backend is already connected")
-        Catalog, Discovery, Connector, Transport, connect = _imports(self.path)
-        device = await Discovery(Catalog.load()).resolve_device(address, Transport.BLE)
+        Catalog, Discovery, Connector, _, connect = _imports(self.path)
+        from timiniprint.devices import BluetoothEndpointResolver
+        catalog = Catalog.load()
+        # Upstream resolve_device() hardcodes a five-second discovery window.
+        # Use the configured timeout here as well as in standalone scan().
+        devices = await Discovery(catalog).scan_devices(timeout=self.timeout, include_classic=False)
+        if not devices:
+            raise RuntimeError("No supported printers found")
+        device = BluetoothEndpointResolver(catalog).select_device(devices, address)
+        if device is None:
+            raise RuntimeError(f"No device matches '{address}'")
         capabilities_for(device)  # Refuse unsupported families before device initialization.
         connected = await connect(device, Connector(), timeout=self.timeout)
         try:

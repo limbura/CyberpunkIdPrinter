@@ -64,28 +64,40 @@ class TiMiniTests(unittest.TestCase):
 
     def test_scan_and_connection_plan_never_use_classic(self):
         import asyncio
-        from unittest.mock import Mock
+        from unittest.mock import AsyncMock, Mock
         from cyberwall_id_printer import TiMiniBackend
         from timiniprint.devices import bluetooth_connection_plan
-        from timiniprint.transport.bluetooth import BluetoothDiscovery, DeviceTransport
+        from timiniprint.transport.bluetooth import DeviceTransport
         from timiniprint.transport.bluetooth.types import DeviceInfo
         from timiniprint.devices.device import BluetoothEndpointTransport
 
         address = "AA:BB:CC:DD:EE:FF"
         endpoint = DeviceInfo(name="MX10", address=address, transport=DeviceTransport.BLE)
         ble = Mock()
-        ble.scan_blocking.return_value = [endpoint]
+        # Simulate a printer which is not discovered within the old 5s window.
+        ble.scan_blocking.side_effect = lambda timeout: [endpoint] if timeout >= 15 else []
+        connected = Mock()
+        connected.disconnect = AsyncMock()
+
+        async def connect(device, connector, **kwargs):
+            connected.printer_device.return_value = device
+            return connected
 
         async def scenario():
-            found = await TiMiniBackend().scan()
+            backend = TiMiniBackend()
+            found = await backend.scan()
             self.assertTrue(any(d["address"] == address for d in found))
-            device = await BluetoothDiscovery(self.catalog).resolve_device(address, DeviceTransport.BLE)
+            caps = await backend.connect(address)
+            self.assertEqual(caps.address, address)
+            device = connected.printer_device()
             attempts = bluetooth_connection_plan(device).attempts
             self.assertTrue(attempts)
             self.assertTrue(all(a.endpoint.transport == BluetoothEndpointTransport.BLE for a in attempts))
+            await backend.disconnect()
 
         with patch("timiniprint.transport.bluetooth.backend._get_classic_adapter",
                    side_effect=AssertionError("Classic must not be used")) as classic, \
-             patch("timiniprint.transport.bluetooth.backend._get_ble_adapter", return_value=ble):
+             patch("timiniprint.transport.bluetooth.backend._get_ble_adapter", return_value=ble), \
+             patch("timiniprint.printing.connected.connect_printer", side_effect=connect):
             asyncio.run(scenario())
             classic.assert_not_called()
