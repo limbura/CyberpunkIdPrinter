@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cyberwall_id_printer"
+version = "0.1.0"
+description = "Segmented Cyrillic ID labels and Bluetooth thermal printing via external TiMini Print"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = ["Pillow>=10,<13"]
+
+[project.optional-dependencies]
+printer = [
+  "bleak>=0.22,<3", "crc8>=0.2.0,<1", "pyserial>=3.5,<4",
+  "platformdirs>=4,<5", "packaging>=21", "pypdfium2>=4,<6",
+  "pyobjc-framework-IOBluetooth>=10; sys_platform == 'darwin'",
+  "winsdk>=1.0.0b10; sys_platform == 'win32'",
+]
+
+[project.scripts]
+cyberwall-id-printer = "cyberwall_id_printer.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+cyberwall_id_printer = ["py.typed"]

@@ -1,0 +1,16 @@
+from typing import Protocol, Any
+from PIL import Image
+from ..models import MediaConfig, PrinterCapabilities
+
+
+class PrinterBackend(Protocol):
+    """Transport extension contract. All calls run on one asyncio event loop."""
+    async def connect(self, address: str) -> PrinterCapabilities: ...
+    async def disconnect(self) -> None: ...
+    def prepare(self, image: Image.Image, media: MediaConfig) -> Any:
+        """Validate and encode without I/O; errors here are safe to correct."""
+        ...
+    async def send(self, job: Any) -> None:
+        """Transmit exactly once, preserving protocol steps/acknowledgements."""
+        ...
+    async def calibrate(self, media: MediaConfig) -> None: ...
