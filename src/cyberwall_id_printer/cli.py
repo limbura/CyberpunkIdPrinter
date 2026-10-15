@@ -10,7 +10,7 @@ from .backends.timini import TiMiniBackend, load_timini
 from .errors import PrinterError
 from .models import MediaConfig, PaperType
 from .printer import Printer
-from .renderer import LabelConfig, render_label
+from .renderer import LabelConfig, LabelMode, render_label
 
 
 def _geometry(parser):
@@ -20,10 +20,16 @@ def _geometry(parser):
 
 
 def _content(parser):
-    parser.add_argument("--id", required=True, dest="account_id")
-    parser.add_argument("--name", required=True)
+    parser.add_argument("--mode", choices=[m.value for m in LabelMode], default=LabelMode.ID_NAME.value)
+    parser.add_argument("--id", dest="account_id")
+    parser.add_argument("--name")
     parser.add_argument("--no-inactive", action="store_true")
     parser.add_argument("--no-decorations", action="store_true")
+
+
+def _label_config(args):
+    return LabelConfig(args.width_mm, args.height_mm, args.dpi,
+                       not args.no_inactive, not args.no_decorations, LabelMode(args.mode))
 
 
 def _media(args):
@@ -43,7 +49,8 @@ async def _device_command(args):
             await printer.calibrate()
             return {"status": "calibrated"}
         return asdict(await printer.print_id(args.account_id, args.name,
-                      inactive=not args.no_inactive, decorations=not args.no_decorations))
+                      mode=LabelMode(args.mode), inactive=not args.no_inactive,
+                      decorations=not args.no_decorations))
 
 
 def main(argv=None):
@@ -71,9 +78,11 @@ def main(argv=None):
             _content(p)
     args = parser.parse_args(argv)
     try:
+        if args.command == "print":
+            # Reject bad/ignored content before any Bluetooth connection or paper motion.
+            render_label(args.account_id, args.name, _label_config(args))
         if args.command == "render":
-            image = render_label(args.account_id, args.name, LabelConfig(
-                args.width_mm, args.height_mm, args.dpi, not args.no_inactive, not args.no_decorations))
+            image = render_label(args.account_id, args.name, _label_config(args))
             args.output.parent.mkdir(parents=True, exist_ok=True)
             image.save(args.output, dpi=(args.dpi,args.dpi))
             if args.preview:

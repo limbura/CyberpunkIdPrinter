@@ -4,6 +4,7 @@ from .backends.base import PrinterBackend
 from .backends.timini import TiMiniBackend
 from .errors import ConnectionStateError, PrintTransmissionError, UnsupportedFeature
 from .layout import render_for_head
+from .renderer import LabelMode
 from .models import MediaConfig, PaperType, PrintResult, PrinterCapabilities
 
 
@@ -60,14 +61,15 @@ class Printer:
             self._validate_media(media)
             self._media = media  # Applied to the next job; no paper motion here.
 
-    async def print_id(self, account_id: str, name: str, *, inactive: bool = True,
+    async def print_id(self, account_id: str | None = None, name: str | None = None, *,
+                       mode: LabelMode = LabelMode.ID_NAME, inactive: bool = True,
                        decorations: bool = True) -> PrintResult:
         self._check_loop()
         async with self._lock:
             self._validate_media(self._media)
             image = render_for_head(account_id, name, self._media,
                                     self.capabilities.head_width_px,
-                                    inactive=inactive, decorations=decorations)
+                                    inactive=inactive, decorations=decorations, mode=mode)
             job = self._backend.prepare(image, self._media)  # No I/O, safe validation failure.
             try:
                 await self._backend.send(job)

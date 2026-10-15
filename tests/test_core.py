@@ -2,12 +2,48 @@ import asyncio
 import unittest
 from PIL import Image
 from cyberwall_id_printer import (Printer, SyncPrinter, MediaConfig, PaperType,
-    LabelConfig, render_label, format_id, normalize_name, PrinterCapabilities,
+    LabelConfig, LabelMode, render_label, format_id, normalize_name, PrinterCapabilities,
     UnsupportedFeature, PrintTransmissionError, ConnectionStateError)
 from cyberwall_id_printer.layout import render_for_head
 
 
 class RendererTests(unittest.TestCase):
+    def test_fixed_templates_and_digit_positions(self):
+        filled = render_label('123456789', 'Роза фон Праунхайм')
+        blank = render_label(config=LabelConfig(mode=LabelMode.BLANK_ID_NAME))
+        # Unused cells have exactly the same guide on filled and blank labels.
+        for row, length in enumerate((4,3,9)):
+            area = (26+length*25, 108+row*37, 296, 143+row*37)
+            self.assertEqual(filled.crop(area).tobytes(), blank.crop(area).tobytes())
+            self.assertEqual(blank.crop(area).convert('L').getextrema(), (0,255))
+        filled = render_label('123456789', config=LabelConfig(mode=LabelMode.ID_ONLY))
+        blank = render_label(config=LabelConfig(mode=LabelMode.BLANK_ID_ONLY))
+        for row, start in enumerate((0,3,2)):
+            for col in range(6):
+                area = (22+47*col,21+66*row,64+47*col,85+66*row)
+                same = filled.crop(area).tobytes() == blank.crop(area).tobytes()
+                self.assertEqual(same, not start <= col < start+3)
+        self.assertLess(blank.crop((22,87,112,151)).convert('L').getextrema()[0],255)
+
+    def test_content_constraints_and_scaling(self):
+        render_label('001002003', 'А'*11+' '+'Б'*11+' '+'Я'*11)
+        for name in ('А Б В Г', 'А'*12):
+            with self.assertRaises(ValueError): render_label('123456789', name)
+        for mode in (LabelMode.BLANK_ID_NAME, LabelMode.BLANK_ID_ONLY):
+            with self.assertRaises(ValueError): render_label('123456789', config=LabelConfig(mode=mode))
+            with self.assertRaises(ValueError): render_label(config=LabelConfig(mode=mode,inactive=False))
+        with self.assertRaises(ValueError):
+            render_label('123456789','РОЗА',LabelConfig(mode=LabelMode.ID_ONLY))
+        for mode in LabelMode:
+            is_blank = mode.value.startswith('blank')
+            for w,h in ((40,30),(45,35),(30,40)):
+                im = render_label(None if is_blank else '001002003',
+                                  'ЁЖ ЙОД ЩУКА' if mode==LabelMode.ID_NAME else None,
+                                  LabelConfig(w,h,mode=mode))
+                self.assertEqual(im.size,(w*8,h*8))
+                self.assertEqual(im.mode,'1')
+                self.assertEqual(im.crop((0,0,im.width,5)).convert('L').getextrema(),(255,255))
+
     def test_sample_and_exact_padding(self):
         image = render_label("123456789", "Роза фон Праунхайм")
         self.assertEqual((image.mode, image.size), ("1", (320,240)))
@@ -141,7 +177,10 @@ class SyncTests(unittest.TestCase):
         with SyncPrinter(backend) as p:
             p.connect("fake")
             p.print_id("123456789","РОЗА")
-            p.print_id("123456789","РОЗА")
+            p.print_id(mode=LabelMode.BLANK_ID_NAME)
+            p.print_id("123456789", mode=LabelMode.ID_ONLY)
+            p.print_id(mode=LabelMode.BLANK_ID_ONLY)
+        self.assertEqual(backend.sends,4)
         self.assertEqual(len(set(backend.loops)),1)
         self.assertTrue(backend.disconnected)
         with self.assertRaises(ConnectionStateError): p.connect("fake")

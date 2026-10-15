@@ -43,7 +43,7 @@ class SyncPrinter:
     def configure_media(self, media):
         return self._run(self._printer.configure_media, media)
 
-    def print_id(self, account_id, name, **kwargs):
+    def print_id(self, account_id=None, name=None, **kwargs):
         return self._run(self._printer.print_id, account_id, name, **kwargs)
 
     def calibrate(self):

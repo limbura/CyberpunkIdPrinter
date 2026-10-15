@@ -1,10 +1,11 @@
-"""CYBERWALL segment label renderer v0.1. Python 3.10+, Pillow.
+"""CYBERWALL segment label renderer: four fixed layouts, Python 3.11+, Pillow.
 
 Pure layout/raster module: no database, Bluetooth or printer side effects.
 Coordinates are drawn directly on the final monochrome pixel grid.
 """
 from __future__ import annotations
 from dataclasses import dataclass
+from enum import Enum
 from math import hypot, isfinite
 import re
 import unicodedata
@@ -49,6 +50,13 @@ LATIN = {'A':'abcefg','B':'abcdefg','C':'afed','D':'abcdhi','E':'afged',
 GLYPHS = {**DIGITS, **CYRILLIC, **LATIN, '-':'g', '.':'', "'":'', '’':''}
 BACKGROUND = tuple('abcdef') + tuple('hijklmno')  # split middle bar
 
+class LabelMode(str, Enum):
+    ID_NAME = "id-name"
+    BLANK_ID_NAME = "blank-id-name"
+    ID_ONLY = "id-only"
+    BLANK_ID_ONLY = "blank-id-only"
+
+
 @dataclass(frozen=True)
 class LabelConfig:
     width_mm: float = 40.0
@@ -56,6 +64,7 @@ class LabelConfig:
     dpi: float = 203.2  # 8 dots/mm; calibrate against the actual printer
     inactive: bool = True
     decorations: bool = True
+    mode: LabelMode = LabelMode.ID_NAME
 
     @property
     def pixels(self) -> tuple[int,int]:
@@ -132,56 +141,131 @@ def glyph(draw, char, x, y, w, h, thickness, inactive, digit=False, unit=1):
                    (round(x+w*.75),round(y-5*unit))],fill=0,width=max(1,round(unit)))
 
 
-def text_width(text,w,gap,space):
-    return sum(space if c==' ' else w for c in text)+max(0,len(text)-1)*gap
+# Sparse shared anchors for Cyrillic, including accents and descenders.
+NAME_ANCHORS = tuple((u, v) for u in (0, .5, 1) for v in (0, .5, 1)) + (
+    (.25, -.14), (.75, -.14), (0, 1.13), (1, 1.13), (.18, .5))
 
 
-def line(draw,text,cx,y,w,h,thickness,gap,space,inactive,digit=False,unit=1):
-    x=cx-text_width(text,w,gap,space)/2
-    for char in text:
-        if char==' ': x+=space+gap; continue
-        glyph(draw,char,x,y,w,h,thickness,inactive,digit,unit)
-        x+=w+gap
+def validate_content(account_id, name, mode):
+    """Validate before rendering or opening a Bluetooth connection."""
+    mode = LabelMode(mode)
+    blank = mode in (LabelMode.BLANK_ID_NAME, LabelMode.BLANK_ID_ONLY)
+    has_name = mode in (LabelMode.ID_NAME, LabelMode.BLANK_ID_NAME)
+    if blank:
+        if account_id is not None or name is not None:
+            raise ValueError("Для пустого шаблона не передавайте ID и имя.")
+        return "", []
+    digits = format_id(account_id).replace(" ", "")
+    if has_name:
+        if not isinstance(name, str):
+            raise ValueError("Для режима id-name требуется имя.")
+        words = normalize_name(name).split()
+        if len(words) > 3 or any(len(word) > 11 for word in words):
+            raise ValueError("Имя: не более трёх слов, не более 11 символов в каждом.")
+    else:
+        if name is not None:
+            raise ValueError("Для режима id-only не передавайте имя.")
+        words = []
+    return digits, words
 
 
-def name_layout(name,available,unit):
-    # Prefer one line when readable, otherwise word-balanced two-line layout.
-    candidates=[(name,)]
-    words=name.split()
-    candidates.extend((' '.join(words[:i]),' '.join(words[i:])) for i in range(1,len(words)))
-    best=None
-    for lines in candidates:
-        for raw_w in range(21,11,-1):
-            w=raw_w*unit; gap=4*unit; space=7*unit
-            if max(text_width(s,w,gap,space) for s in lines)<=available:
-                score=raw_w-(2 if len(lines)==2 else 0)
-                if best is None or score>best[0]: best=(score,lines,w,gap,space)
-                break
-    if best is None:
-        raise ValueError('Имя слишком длинное для читаемой печати: увеличьте этикетку или сократите имя.')
-    return best[1:]
+def _cell(draw, char, x, y, w, h, unit, inactive, digit=False, segments=None):
+    if inactive:
+        if digit:
+            for seg in 'abcdefg':
+                a, b = SEGMENTS[seg]
+                start = (x+a[0]*w, y+a[1]*h)
+                end = (x+b[0]*w, y+b[1]*h)
+                count = max(1, round(hypot(end[0]-start[0], end[1]-start[1]) / (4*unit)))
+                for j in range(count):
+                    t = (j+.5)/count
+                    xx = round(start[0]+(end[0]-start[0])*t)
+                    yy = round(start[1]+(end[1]-start[1])*t)
+                    dot = max(1, round(unit))
+                    draw.rectangle((xx, yy, xx+dot-1, yy+dot-1), fill=0)
+        else:
+            for u, v in NAME_ANCHORS:
+                xx, yy = round(x+u*w), round(y+v*h)
+                dot = max(1, round(unit))
+                draw.rectangle((xx, yy, xx+dot-1, yy+dot-1), fill=0)
+    if segments is not None:
+        for seg in segments:
+            a, b = SEGMENTS[seg]
+            stroke(draw, (x+a[0]*w,y+a[1]*h), (x+b[0]*w,y+b[1]*h), 4*unit)
+    elif char:
+        glyph(draw, char, x, y, w, h, (4 if digit else 2)*unit, False, digit, unit)
 
 
-def render_label(account_id: str|int, name: str, config: LabelConfig|None=None) -> Image.Image:
-    config=config or LabelConfig()
-    account_id=format_id(account_id); name=normalize_name(name)
-    width,height=config.pixels
-    unit=min(width/320,height/240)
-    image=Image.new('1',(width,height),1)
-    draw=ImageDraw.Draw(image)
-    cx=width/2; left=cx-144*unit; top=(height-240*unit)/2
+_MICRO = {
+    'I': ('111','010','010','010','111'),
+    'D': ('110','101','101','101','110'),
+    '/': ('001','001','010','100','100'),
+    '0': ('111','101','101','101','111'),
+    '1': ('010','110','010','010','111'),
+    '3': ('111','001','111','001','111'),
+}
+
+
+def _micro_text(draw, text, x, y, sx, sy):
+    # Built-in bitmap glyphs: deterministic on Windows/Linux; no font dependency.
+    for index, char in enumerate(text):
+        for row, bits in enumerate(_MICRO.get(char, ())):
+            for col, bit in enumerate(bits):
+                if bit == '1':
+                    xx, yy = x+index*4+col, y+row
+                    draw.rectangle((round(xx*sx), round(yy*sy),
+                                    round(xx*sx)+max(1,round(sx))-1,
+                                    round(yy*sy)+max(1,round(sy))-1), fill=0)
+
+
+def render_label(account_id: str|int|None = None, name: str|None = None,
+                 config: LabelConfig|None = None) -> Image.Image:
+    config = config or LabelConfig()
+    mode = LabelMode(config.mode)
+    digits, words = validate_content(account_id, name, mode)
+    blank = mode in (LabelMode.BLANK_ID_NAME, LabelMode.BLANK_ID_ONLY)
+    id_only = mode in (LabelMode.ID_ONLY, LabelMode.BLANK_ID_ONLY)
+    if blank and not config.inactive:
+        raise ValueError("Пустой шаблон требует inactive=True.")
+    width, height = config.pixels
+    sx, sy = width/320, height/240
+    unit = min(sx, sy)
+    image = Image.new('1', (width, height), 1)
+    draw = ImageDraw.Draw(image)
+    thin = max(1, round(unit))
+
+    def rule(points):
+        draw.line([(round(x*sx),round(y*sy)) for x,y in points],fill=0,width=thin)
+
+    def cell(char, x, y, w, h, digit=False, segments=None):
+        _cell(draw, char, x*sx, y*sy, w*sx, h*sy, unit,
+              config.inactive, digit, segments)
+
     if config.decorations:
-        # Short open corner marks: no full enclosing border or extraneous text.
-        for xx,yy,sx,sy in [(left,top+14*unit,1,1),(cx+144*unit,top+14*unit,-1,1),
-                            (left,top+226*unit,1,-1),(cx+144*unit,top+226*unit,-1,-1)]:
-            draw.line([(round(xx+sx*10*unit),round(yy)),(round(xx),round(yy)),
-                       (round(xx),round(yy+sy*7*unit))],fill=0,width=max(1,round(unit)))
-        draw.line((round(cx-130*unit),round(top+116*unit),round(cx+130*unit),round(top+116*unit)),fill=0,width=max(1,round(unit)))
-    line(draw,account_id,cx,top+34*unit,20*unit,61*unit,4*unit,8*unit,7*unit,config.inactive,True,unit)
-    lines,w,gap,space=name_layout(name,270*unit,unit)
-    h=min(34*unit,w*1.65)
-    ys=[top+158*unit] if len(lines)==1 else [top+139*unit,top+188*unit]
-    for text,y in zip(lines,ys):
-        line(draw,text,cx,y,w,h,2*unit,gap,space,config.inactive,False,unit)
+        for x,y,dx,dy in [(16,14,1,1),(304,14,-1,1),(16,226,1,-1),(304,226,-1,-1)]:
+            rule([(x+dx*10,y),(x,y),(x,y+dy*7)])
+    if id_only:
+        for row, start in enumerate((0,3,2)):
+            for col in range(6):
+                char = digits[row*3+col-start] if digits and start <= col < start+3 else ''
+                # Semantic ID marker remains on the blank template as well.
+                marker = ('bc','bcdeg')[col] if row == 1 and col < 2 else None
+                cell(char,25+col*47,24+row*66,35,58,True,marker)
+        if config.decorations:
+            for row, count in enumerate((1,2,3)):
+                for j in range(count):
+                    y = 46+row*66+j*6
+                    rule([(14,y),(19,y)])
+                    rule([(301,y),(306,y)])
+            _micro_text(draw,'ID / 01',245,18,sx,sy)
+            _micro_text(draw,'ID / 03',245,219,sx,sy)
+    else:
+        for i in range(9):
+            cell(digits[i] if digits else '',25+i*28+(i//3)*10,31,20,49,True)
+        if config.decorations:
+            rule([(26,96),(294,96)])
+        for row in range(3):
+            word = words[row] if row < len(words) else ''
+            for col in range(11):
+                cell(word[col] if col < len(word) else '',26+col*25,113+row*37,18,25)
     return image
-
