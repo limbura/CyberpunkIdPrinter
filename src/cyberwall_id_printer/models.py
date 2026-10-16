@@ -56,3 +56,9 @@ class PrintResult:
     height_px: int
     status: str = "sent"
     physical_completion_confirmed: bool = False
+    copies: int = 1
+
+
+def validate_copies(copies: int) -> None:
+    if type(copies) is not int or not 1 <= copies <= 100:
+        raise ValueError("copies must be an integer from 1 to 100")

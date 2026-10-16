@@ -46,6 +46,9 @@ class SyncPrinter:
     def print_id(self, account_id=None, name=None, **kwargs):
         return self._run(self._printer.print_id, account_id, name, **kwargs)
 
+    def check_connection(self):
+        return self._run(self._printer.check_connection)
+
     def calibrate(self):
         return self._run(self._printer.calibrate)
 

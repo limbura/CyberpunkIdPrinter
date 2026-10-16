@@ -1,7 +1,7 @@
 """Thin adapter to a separate, revision-pinned TiMini Print checkout.
 
 No upstream code is bundled. Imports and Bluetooth are lazy; rendering works
-without TiMini or Bluetooth dependencies. Only V5G/MX10 and V5X simple roll
+without TiMini or Bluetooth dependencies. Only V5G and V5X simple roll
 recipes are enabled in v0.1; other families need their own layout validation.
 """
 from __future__ import annotations
@@ -12,7 +12,7 @@ import subprocess
 import sys
 from PIL import Image
 from ..errors import BackendUnavailable, UnsupportedFeature
-from ..models import MediaConfig, PaperType, PrinterCapabilities
+from ..models import MediaConfig, PaperType, PrinterCapabilities, validate_copies
 
 TIMINI_REVISION = "679fc0650e61c7ab28b44542b9b9ba000e45aa78"
 TIMINI_URL = "https://github.com/Dejniel/TiMini-Print.git"
@@ -69,10 +69,11 @@ def capabilities_for(device) -> PrinterCapabilities:
     return PrinterCapabilities(device.name, device.address, device.profile_key,
         plain.paper_width_px, device.profile.dev_dpi, hardware_labels=labels,
         label_note=("V5X TAG recipe from TiMini; physical label positioning needs hardware testing."
-                    if labels else "MX10/V5G label mode is not implemented. FunPrint support does not imply this adapter supports it."))
+                    if labels else "Hardware label positioning is not implemented for this thermal printer profile."))
 
 
-def encode_job(device, runtime_capabilities, image: Image.Image, media: MediaConfig, blackening: int = 3):
+def encode_job(device, runtime_capabilities, image: Image.Image, media: MediaConfig, blackening: int = 3,
+               *, page_index: int = 1, page_count: int = 1):
     from timiniprint.protocol.job import PrinterProtocol
     from timiniprint.raster import RasterBuffer, RasterSet, PixelFormat
     caps = capabilities_for(device)
@@ -92,7 +93,8 @@ def encode_job(device, runtime_capabilities, image: Image.Image, media: MediaCon
     raster = RasterBuffer([int(pixel == 0) for pixel in image.convert("L").tobytes()], image.width, PixelFormat.BW1)
     return PrinterProtocol(device).build_job(RasterSet.from_single(raster),
         is_text=False, blackening=blackening, paper_preset_key=preset.key,
-        pixel_format_override=PixelFormat.BW1, runtime_capabilities=runtime_capabilities)
+        pixel_format_override=PixelFormat.BW1, runtime_capabilities=runtime_capabilities,
+        page_index=page_index, page_count=page_count)
 
 
 class TiMiniBackend:
@@ -145,6 +147,39 @@ class TiMiniBackend:
             raise RuntimeError("Backend is not connected")
         return encode_job(self._connected.printer_device(), self._connected.print_capabilities(),
                           image, media, self.blackening)
+
+    def prepare_copies(self, image: Image.Image, media: MediaConfig, copies: int):
+        validate_copies(copies)
+        if self._connected is None:
+            raise RuntimeError("Backend is not connected")
+        connected = self._connected
+        return connected.raster_pages_job(
+            encode_job(connected.printer_device(), connected.print_capabilities(),
+                       image, media, self.blackening, page_index=i, page_count=copies)
+            for i in range(1, copies + 1)
+        )
+
+    async def check_connection(self) -> bool:
+        if self._connected is None:
+            return False
+        # Pinned upstream has no public liveness API on ConnectedPrinter.
+        # Its BLE loop runs inside SppBackend's serialized worker, only during
+        # operations. Pump it there so idle disconnect notifications are handled;
+        # never run that loop or touch GATT from our application's thread.
+        import asyncio
+        backend = self._connected._connection._backend
+
+        def check():
+            sock = backend._sock
+            if sock is None or not backend.is_connected():
+                return False
+            client, loop = sock._client, sock._loop
+            if client is None or loop is None or loop.is_closed():
+                return False
+            loop.run_until_complete(asyncio.sleep(0.05))
+            return bool(client.is_connected)
+
+        return await backend._run_blocking(check)
 
     async def send(self, job) -> None:
         if self._connected is None:

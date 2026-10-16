@@ -8,7 +8,7 @@ import sys
 from . import __version__
 from .backends.timini import TiMiniBackend, load_timini
 from .errors import PrinterError
-from .models import MediaConfig, PaperType
+from .models import MediaConfig, PaperType, validate_copies
 from .printer import Printer
 from .renderer import LabelConfig, LabelMode, render_label
 
@@ -50,7 +50,7 @@ async def _device_command(args):
             return {"status": "calibrated"}
         return asdict(await printer.print_id(args.account_id, args.name,
                       mode=LabelMode(args.mode), inactive=not args.no_inactive,
-                      decorations=not args.no_decorations))
+                      decorations=not args.no_decorations, copies=args.copies))
 
 
 def main(argv=None):
@@ -76,9 +76,11 @@ def main(argv=None):
             p.add_argument("--paper", choices=[p.value for p in PaperType], default="labels" if command == "calibrate" else "continuous")
         if command == "print":
             _content(p)
+            p.add_argument("--copies", type=int, default=1, help="Copies in one job (1–100)")
     args = parser.parse_args(argv)
     try:
         if args.command == "print":
+            validate_copies(args.copies)
             # Reject bad/ignored content before any Bluetooth connection or paper motion.
             render_label(args.account_id, args.name, _label_config(args))
         if args.command == "render":

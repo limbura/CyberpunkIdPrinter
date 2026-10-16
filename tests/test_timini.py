@@ -101,3 +101,54 @@ class TiMiniTests(unittest.TestCase):
              patch("timiniprint.printing.connected.connect_printer", side_effect=connect):
             asyncio.run(scenario())
             classic.assert_not_called()
+
+    def test_actual_batch_keeps_page_metadata_and_protocol_steps(self):
+        from unittest.mock import Mock
+        from cyberwall_id_printer import TiMiniBackend
+        from timiniprint.protocol.job import PrinterProtocol
+        from timiniprint.printing.raster_job import combine_raster_page_jobs
+        device = self.catalog.device_from_key('mx10')
+        backend = TiMiniBackend()
+        connected = Mock()
+        connected.printer_device.return_value = device
+        connected.print_capabilities.return_value = None
+        connected.raster_pages_job.side_effect = combine_raster_page_jobs
+        backend._connected = connected
+        image = render_for_head('123456789', 'РОЗА', MediaConfig(), 384)
+        original = PrinterProtocol.build_job
+        metadata, pages = [], []
+        def build(protocol, *args, **kwargs):
+            metadata.append((kwargs['page_index'], kwargs['page_count']))
+            job = original(protocol, *args, **kwargs)
+            pages.append(job)
+            return job
+        with patch.object(PrinterProtocol, 'build_job', build):
+            job = backend.prepare_copies(image, MediaConfig(), 10)
+        self.assertEqual(metadata, [(i,10) for i in range(1,11)])
+        self.assertEqual(job.payload, b''.join(page.payload for page in pages))
+        self.assertEqual(job.steps, tuple(step for page in pages for step in page.steps))
+
+    def test_idle_ble_monitor_pumps_socket_loop_and_reads_real_client_state(self):
+        import asyncio
+        from types import SimpleNamespace
+        from cyberwall_id_printer import TiMiniBackend
+        class Transport:
+            _sock = None
+            def is_connected(self): return True
+            async def _run_blocking(self, function):
+                return await asyncio.to_thread(function)
+        transport = Transport()
+        backend = TiMiniBackend()
+        backend._connected = SimpleNamespace(_connection=SimpleNamespace(_backend=transport))
+        loop = asyncio.new_event_loop()
+        client = SimpleNamespace(is_connected=True)
+        transport._sock = SimpleNamespace(_client=client, _loop=loop)
+        async def scenario():
+            self.assertTrue(await backend.check_connection())
+            # Delivered on the otherwise-idle upstream BLE event loop.
+            loop.call_soon(setattr, client, 'is_connected', False)
+            self.assertFalse(await backend.check_connection())
+        try:
+            asyncio.run(scenario())
+        finally:
+            loop.close()

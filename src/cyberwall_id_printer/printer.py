@@ -5,7 +5,7 @@ from .backends.timini import TiMiniBackend
 from .errors import ConnectionStateError, PrintTransmissionError, UnsupportedFeature
 from .layout import render_for_head
 from .renderer import LabelMode
-from .models import MediaConfig, PaperType, PrintResult, PrinterCapabilities
+from .models import MediaConfig, PaperType, PrintResult, PrinterCapabilities, validate_copies
 
 
 class Printer:
@@ -63,14 +63,22 @@ class Printer:
 
     async def print_id(self, account_id: str | None = None, name: str | None = None, *,
                        mode: LabelMode = LabelMode.ID_NAME, inactive: bool = True,
-                       decorations: bool = True) -> PrintResult:
+                       decorations: bool = True, copies: int = 1) -> PrintResult:
+        validate_copies(copies)
         self._check_loop()
         async with self._lock:
             self._validate_media(self._media)
             image = render_for_head(account_id, name, self._media,
                                     self.capabilities.head_width_px,
                                     inactive=inactive, decorations=decorations, mode=mode)
-            job = self._backend.prepare(image, self._media)  # No I/O, safe validation failure.
+            if copies == 1:
+                job = self._backend.prepare(image, self._media)
+            else:
+                prepare = getattr(self._backend, "prepare_copies", None)
+                if prepare is None:
+                    raise UnsupportedFeature("This backend does not support a multi-page job")
+                job = prepare(image, self._media, copies)
+            # All pages are prepared before I/O; send once, never replay a batch.
             try:
                 await self._backend.send(job)
             except asyncio.CancelledError:
@@ -79,7 +87,25 @@ class Printer:
             except Exception as exc:
                 self._uncertain = True
                 raise PrintTransmissionError("Transmission failed; some or all of this job may have printed. No retry performed.") from exc
-            return PrintResult(image.width, image.height)
+            return PrintResult(image.width, image.height, copies=copies)
+
+    async def check_connection(self) -> bool:
+        """Refresh transport state without printing or moving paper.
+
+        A false result requires disconnect/connect before further use. Backends
+        without monitoring explicitly raise UnsupportedFeature.
+        """
+        self._check_loop()
+        async with self._lock:
+            if self._capabilities is None or self._uncertain:
+                return False
+            check = getattr(self._backend, "check_connection", None)
+            if check is None:
+                raise UnsupportedFeature("This backend does not support connection monitoring")
+            alive = await check()
+            if not alive:
+                self._uncertain = True
+            return alive
 
     async def calibrate(self) -> None:
         self._check_loop()
