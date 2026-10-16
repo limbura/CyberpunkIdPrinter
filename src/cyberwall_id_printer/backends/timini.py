@@ -6,6 +6,7 @@ recipes are enabled in v0.1; other families need their own layout validation.
 """
 from __future__ import annotations
 import importlib
+import json
 import os
 from pathlib import Path
 import subprocess
@@ -19,6 +20,21 @@ TIMINI_URL = "https://github.com/Dejniel/TiMini-Print.git"
 
 
 def load_timini(path: str | Path | None = None) -> Path:
+    if getattr(sys, "frozen", False):
+        # Build-time Git validation is recorded in a bundled manifest. Never use
+        # environment paths or external source trees in a standalone executable.
+        root = Path(sys._MEIPASS).resolve()
+        try:
+            manifest = json.loads((root / "cyberwall_timini.json").read_text(encoding="utf-8"))
+            if manifest["revision"] != TIMINI_REVISION:
+                raise ValueError("TiMini revision mismatch")
+            module = importlib.import_module("timiniprint")
+            if Path(module.__file__).resolve().parent != root / "timiniprint":
+                raise ValueError("TiMini was loaded outside the executable bundle")
+            importlib.import_module("timiniprint.devices")
+        except (OSError, ImportError, ValueError, KeyError, TypeError) as exc:
+            raise BackendUnavailable("Bundled TiMini is missing or incompatible; rebuild the complete application") from exc
+        return root
     configured = path or os.environ.get("CYBERWALL_TIMINI_PATH")
     if not configured:
         raise BackendUnavailable("Set CYBERWALL_TIMINI_PATH to the external TiMini Print checkout (see README)")
