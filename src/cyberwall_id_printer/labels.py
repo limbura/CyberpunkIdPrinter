@@ -1,6 +1,8 @@
 """Single-label peel/retract workflow. No automatic replay of physical actions."""
 from __future__ import annotations
 import asyncio
+import logging
+import time
 from dataclasses import dataclass
 from enum import Enum
 from math import isfinite
@@ -55,6 +57,9 @@ class LabelOperationError(PrinterError):
         super().__init__(f'Label operation failed at {stage}; position unknown; no retry performed')
 
 
+log = logging.getLogger(__name__)
+
+
 class LabelPrinter:
     """Opt-in V5G labels; distinct from Printer's existing recipes.
 
@@ -80,6 +85,7 @@ class LabelPrinter:
         self._recovery = True
         self._last_status = None
         self._on_event = on_event
+        self._print_attempt = 0
 
     def _check_loop(self):
         loop = asyncio.get_running_loop()
@@ -123,11 +129,15 @@ class LabelPrinter:
     async def _status(self):
         if self.state == LabelState.DISCONNECTED:
             raise ConnectionStateError('Not connected')
+        log.debug("STATUS query start state=%s epoch=%s", self.state.value, self._epoch)
+        started = time.monotonic()
         try:
             status, epoch, updated = await self._backend.query_status()
         except BaseException:
             self._unknown()
             raise
+        log.debug("STATUS reply status=%s epoch=%s last_epoch=%s elapsed=%.3fs updated=%.6f",
+                  status, epoch, self._epoch, time.monotonic() - started, updated)
         if self._epoch is not None and epoch != self._epoch:
             self._unknown()
         self._epoch = epoch
@@ -169,6 +179,8 @@ class LabelPrinter:
             self._event('removal_confirmed')
 
     async def _position(self):
+        log.info("POSITION start state=%s position_timeout=%s", self.state.value, self.settings.position_timeout)
+        started = time.monotonic()
         self._event('positioning')
         epoch = self._epoch
         await self._backend.position(self.settings.position_timeout)
@@ -177,6 +189,7 @@ class LabelPrinter:
             raise PrinterError('Printer condition changed during positioning')
         self.state = LabelState.READY
         self._confirmed = False
+        log.info("POSITION ready elapsed=%.3fs epoch=%s", time.monotonic() - started, self._epoch)
 
     async def recover(self):
         """Forward-only recovery. Does not retract, print, or retain a job."""
@@ -208,11 +221,18 @@ class LabelPrinter:
         if image.mode != '1' or image.width != 384 or not 1 <= image.height <= round(self.media.height_mm * self.media.dpi / 25.4):
             raise ValueError('Expected monochrome image, width 384 and height within configured label')
         async with self._lock:
+            self._print_attempt += 1
+            attempt = self._print_attempt
             stage = 'status'
+            started = time.monotonic()
+            log.info("PRINT_ATTEMPT #%s start state=%s recovery=%s confirmed=%s raster=%sx%s",
+                     attempt, self.state.value, self._recovery, self._confirmed, image.width, image.height)
             try:
                 await self._status()
+                log.info("PRINT_ATTEMPT #%s status_checked state=%s status=%s", attempt, self.state.value, self._last_status)
                 if self.state == LabelState.UNKNOWN:
                     stage = 'positioning'
+                    log.info("PRINT_ATTEMPT #%s unknown_position: stabilize 0.3s then F0", attempt)
                     await asyncio.sleep(0.3)
                     await self._status()
                     await self._position()  # No blind reverse on recovery.
@@ -231,8 +251,10 @@ class LabelPrinter:
                 self._recovery = False
                 self._confirmed = False
                 stage = 'printing'
+                log.info("PRINT_ATTEMPT #%s raster_phase start elapsed=%.3fs", attempt, time.monotonic() - started)
                 self._event(stage)
                 await self._backend.print_image(image, self.settings.settle_seconds)
+                log.info("PRINT_ATTEMPT #%s raster_phase done elapsed=%.3fs", attempt, time.monotonic() - started)
                 stage = 'presenting'
                 self._event(stage)
                 epoch = self._epoch
@@ -243,13 +265,16 @@ class LabelPrinter:
                     raise PrinterError('Printer condition changed during presentation')
                 self.state = LabelState.PRESENTED
                 self._event('presented')
+                log.info("PRINT_ATTEMPT #%s success elapsed=%.3fs", attempt, time.monotonic() - started)
                 return PrintResult(image.width, image.height)
             except RemovalRequired:
+                log.info("PRINT_ATTEMPT #%s removal_required stage=%s elapsed=%.3fs", attempt, stage, time.monotonic() - started)
                 raise
             except asyncio.CancelledError:
                 self._unknown()
                 raise
             except Exception as exc:
+                log.exception("PRINT_ATTEMPT #%s failed stage=%s elapsed=%.3fs", attempt, stage, time.monotonic() - started)
                 self._unknown()
                 raise LabelOperationError(stage) from exc
 
