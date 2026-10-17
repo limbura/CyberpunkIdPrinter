@@ -3,7 +3,7 @@
 No global monkey-patches: each connection owns its socket and timeout.
 Imports are lazy so rendering still needs only Pillow.
 """
-def connector_with_timeout(timeout):
+def connector_with_timeout(timeout, *, ble_device=None):
     from timiniprint import reporting
     from timiniprint.transport.bluetooth.backend import SppBackend
     from timiniprint.transport.bluetooth.connector import BleakBluetoothConnector, BleakBluetoothConnection
@@ -16,7 +16,8 @@ def connector_with_timeout(timeout):
             if device.transport != DeviceTransport.BLE:
                 raise ValueError("This connector supports BLE only")
             sock = _BleakSocket(pairing_hint=pairing_hint, ble_profile=device.ble_profile,
-                                ble_mtu_request=device.ble_mtu_request, reporter=self._reporter)
+                                ble_mtu_request=device.ble_mtu_request, reporter=self._reporter,
+                                device_cache=({device.address.upper(): ble_device} if ble_device is not None else {}))
             sock.settimeout(timeout)
             try:
                 sock.connect((device.address, 1))
