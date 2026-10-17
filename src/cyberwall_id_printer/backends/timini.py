@@ -165,7 +165,33 @@ class TiMiniBackend:
         catalog = Catalog.load()
         # Upstream resolve_device() hardcodes a five-second discovery window.
         # Use the configured timeout here as well as in standalone scan().
-        devices = await Discovery(catalog).scan_devices(timeout=self.scan_timeout, include_classic=False)
+        discovery = Discovery(catalog)
+        devices = []
+        # Address-targeted BLE scanning stops as soon as the requested peripheral
+        # advertises. Do not make every successful connection wait scan_timeout.
+        from timiniprint.transport.bluetooth.types import DeviceInfo, DeviceTransport
+        from bleak import BleakScanner
+        import time
+        started = time.monotonic()
+        try:
+            found = await BleakScanner.find_device_by_address(address, timeout=self.scan_timeout)
+            if found is not None:
+                endpoint = DeviceInfo(
+                    name=found.name or "", address=found.address, paired=False,
+                    transport=DeviceTransport.BLE,
+                )
+                devices = discovery.devices_from_scan([endpoint])
+                logging.getLogger(__name__).info(
+                    "Targeted BLE discovery matched %s in %.2f s; resolved=%s",
+                    address, time.monotonic() - started, len(devices))
+        except (OSError, RuntimeError) as exc:
+            logging.getLogger(__name__).warning(
+                "Targeted BLE discovery failed (%s); using regular discovery", exc)
+        if not devices:
+            # Some platforms omit names from advertisements, preventing the
+            # model catalog from resolving a single endpoint. Keep TiMini's
+            # normal discovery for that case.
+            devices = await discovery.scan_devices(timeout=self.scan_timeout, include_classic=False)
         if not devices:
             raise RuntimeError("No supported printers found")
         device = BluetoothEndpointResolver(catalog).select_device(devices, address)
