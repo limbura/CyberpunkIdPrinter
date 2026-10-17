@@ -7,6 +7,7 @@ recipes are enabled in v0.1; other families need their own layout validation.
 from __future__ import annotations
 import importlib
 import json
+import logging
 import os
 from pathlib import Path
 import subprocess
@@ -14,6 +15,8 @@ import sys
 from PIL import Image
 from ..errors import BackendUnavailable, UnsupportedFeature
 from ..models import MediaConfig, PaperType, PrinterCapabilities, validate_copies
+
+logging.getLogger(__name__).addHandler(logging.NullHandler())
 
 TIMINI_REVISION = "679fc0650e61c7ab28b44542b9b9ba000e45aa78"
 TIMINI_URL = "https://github.com/Dejniel/TiMini-Print.git"
@@ -115,21 +118,46 @@ def encode_job(device, runtime_capabilities, image: Image.Image, media: MediaCon
 
 class TiMiniBackend:
     def __init__(self, path: str | Path | None = None, *, blackening: int = 3,
-                 timeout: float = 15.0):
+                 timeout: float = 20.0, connect_attempts: int = 2, scan_timeout: float = 15.0):
         from math import isfinite
         if isinstance(blackening, bool) or not isinstance(blackening, int) or not 1 <= blackening <= 5:
             raise ValueError("blackening must be an integer from 1 to 5")
         if not isfinite(timeout) or timeout <= 0:
             raise ValueError("timeout must be finite and positive")
+        if type(connect_attempts) is not int or connect_attempts < 1:
+            raise ValueError("connect_attempts must be a positive integer")
+        if not isfinite(scan_timeout) or scan_timeout <= 0:
+            raise ValueError("scan_timeout must be finite and positive")
+        self.connect_attempts, self.scan_timeout = connect_attempts, scan_timeout
         self.path, self.blackening, self.timeout = path, blackening, timeout
         self._connected = None
 
     async def scan(self) -> list[dict[str, str]]:
         Catalog, Discovery, _, _, _ = _imports(self.path)
-        devices = await Discovery(Catalog.load()).scan_devices(timeout=self.timeout, include_classic=False)
+        devices = await Discovery(Catalog.load()).scan_devices(timeout=self.scan_timeout, include_classic=False)
         return [{"name": d.name, "address": d.address, "profile": d.profile_key} for d in devices]
 
     async def connect(self, address: str) -> PrinterCapabilities:
+        import asyncio
+        if self._connected is not None:
+            raise RuntimeError("Backend is already connected")
+        for attempt in range(self.connect_attempts):
+            try:
+                logging.getLogger(__name__).info("Connection attempt %s/%s", attempt + 1, self.connect_attempts)
+                return await self._connect_once(address)
+            except (BackendUnavailable, UnsupportedFeature, ValueError):
+                raise
+            except Exception:
+                logging.getLogger(__name__).exception("Connection attempt failed")
+                await self.disconnect()
+                if attempt + 1 == self.connect_attempts:
+                    raise
+                await asyncio.sleep(1)
+
+    def _connection_options(self, device):
+        return {}
+
+    async def _connect_once(self, address: str) -> PrinterCapabilities:
         if self._connected is not None:
             raise RuntimeError("Backend is already connected")
         Catalog, Discovery, Connector, _, connect = _imports(self.path)
@@ -137,14 +165,16 @@ class TiMiniBackend:
         catalog = Catalog.load()
         # Upstream resolve_device() hardcodes a five-second discovery window.
         # Use the configured timeout here as well as in standalone scan().
-        devices = await Discovery(catalog).scan_devices(timeout=self.timeout, include_classic=False)
+        devices = await Discovery(catalog).scan_devices(timeout=self.scan_timeout, include_classic=False)
         if not devices:
             raise RuntimeError("No supported printers found")
         device = BluetoothEndpointResolver(catalog).select_device(devices, address)
         if device is None:
             raise RuntimeError(f"No device matches '{address}'")
         capabilities_for(device)  # Refuse unsupported families before device initialization.
-        connected = await connect(device, Connector(), timeout=self.timeout)
+        from .ble_connector import connector_with_timeout
+        options = self._connection_options(device)
+        connected = await connect(device, connector_with_timeout(self.timeout), timeout=self.timeout, **options)
         try:
             capabilities = capabilities_for(connected.printer_device())
         except BaseException:

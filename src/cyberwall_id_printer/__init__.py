@@ -7,8 +7,13 @@ from .backends import TiMiniBackend, PrinterBackend
 from .errors import (PrinterError, BackendUnavailable, UnsupportedFeature,
                      ConnectionStateError, PrintTransmissionError)
 
-__version__ = "0.3.1"
+__version__ = "0.4.0"
 __all__ = ["LabelConfig", "LabelMode", "render_label", "format_id", "normalize_name", "MediaConfig",
            "PaperType", "PrinterCapabilities", "PrintResult", "Printer", "SyncPrinter",
            "TiMiniBackend", "PrinterBackend", "PrinterError", "BackendUnavailable",
            "UnsupportedFeature", "ConnectionStateError", "PrintTransmissionError"]
+
+from .labels import (LabelPrinter, LabelSettings, LabelState, RemovalConfirmation,
+                     RemovalRequired, LabelOperationError)
+__all__ += ["LabelPrinter", "LabelSettings", "LabelState", "RemovalConfirmation",
+            "RemovalRequired", "LabelOperationError"]
