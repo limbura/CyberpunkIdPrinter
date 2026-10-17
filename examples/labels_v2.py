@@ -8,6 +8,7 @@ import asyncio
 from datetime import datetime
 import json
 import logging
+import time
 from PIL import Image
 from cyberwall_id_printer import (
     LabelPrinter, LabelSettings, RemovalRequired, LabelOperationError,
@@ -48,6 +49,8 @@ async def main(args):
     logging.basicConfig(filename=log, level=logging.DEBUG, encoding='utf-8',
                         format='%(asctime)s %(name)s %(levelname)s %(message)s')
     print('Журнал:', log)
+    logging.info('LABELS_V2 START address=%s scan_timeout=%.2f timeout=%.2f settle=%.2f motion_settle=%.2f',
+                 args.address, args.scan_timeout, args.timeout, args.settle, args.motion_settle)
     print('Экспериментальный режим. Ожидания движения — по времени, не подтверждение завершения печати.')
     if args.confirmation == 'never':
         print('Подтверждения отключены: перед следующей печатью самостоятельно снимайте наклейку.')
@@ -96,7 +99,10 @@ async def main(args):
     task = None
     try:
         try:
+            connected_at = time.monotonic()
+            logging.info('INITIAL_CONNECT start address=%s', args.address)
             await printer.connect(args.address)
+            logging.info('INITIAL_CONNECT done elapsed=%.3fs state=%s', time.monotonic() - connected_at, printer.state.value)
         except Exception as exc:
             print('Подключение не удалось:', exc, '\nМожно повторить пунктом 5.')
             logging.exception('Connect failed; no paper motion requested')
@@ -110,6 +116,7 @@ async def main(args):
                 '0 — выйти\n> ')).strip()
             except EOFError:
                 break
+            logging.info('MENU choice=%r state=%s', choice, printer.state.value)
             try:
                 if choice == '0':
                     break
@@ -118,13 +125,18 @@ async def main(args):
                 elif choice == '2':
                     print(await printer.print_id('123456789', mode=LabelMode.ID_ONLY))
                 elif choice == '3':
+                    logging.info('REMOVAL_CONFIRM requested')
                     await printer.confirm_removed()
                     print('Подтверждено. Для печати выберите 1 или 2.')
                 elif choice == '4':
+                    logging.info('MANUAL_RECOVERY requested')
                     await printer.recover()
+                    logging.info('MANUAL_RECOVERY returned state=%s', printer.state.value)
                 elif choice == '5':
+                    logging.info('MANUAL_RECONNECT requested')
                     await printer.disconnect()
                     await printer.connect(args.address)
+                    logging.info('MANUAL_RECONNECT done state=%s', printer.state.value)
             except RemovalRequired:
                 print('Снимите ВСЕ выступающие наклейки, закройте крышку, выберите 3, затем снова 1 или 2.')
             except Exception as exc:
