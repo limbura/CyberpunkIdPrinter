@@ -48,6 +48,24 @@ class LabelTests(unittest.IsolatedAsyncioTestCase):
         await p.print_image(image)
         self.assertEqual(p._backend.calls[-4:], [('reverse', 25), 'F0', 'print', ('feed', 15)])
 
+    async def test_motion_wait_is_independent_and_finishes_before_f0(self):
+        p = await self.create('never')
+        p.settings = LabelSettings(confirmation='never', motion_settle_seconds=10)
+        image = Image.new('1', (384, 24), 1)
+        await p.print_image(image)
+        events = []
+        async def move(mm, *, reverse, settle):
+            events.append(('motion_start', reverse, settle))
+            await asyncio.sleep(0)
+            events.append('motion_finished')
+        async def position(timeout):
+            self.assertEqual(events[-1], 'motion_finished')
+            events.append('F0')
+        p._backend.move = move
+        p._backend.position = position
+        await p.print_image(image)
+        self.assertEqual(events[:3], [('motion_start', True, 10), 'motion_finished', 'F0'])
+
     async def test_never_and_recovery_modes(self):
         image = Image.new('1', (384, 24), 1)
         for mode in ('never', 'recovery'):
@@ -201,3 +219,18 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         old = module('original_label_experiment', root / 'other' / 'thermoprinter_label_test.py')
         example = module('label_v2_example', root / 'examples' / 'labels_v2.py')
         self.assertEqual(tuple(image_packets(example.mark())), tuple(old.print_packets()))
+
+    async def test_raster_uses_one_standard_send_without_extra_feed(self):
+        from cyberwall_id_printer.backends.label_timini import LabelTiMiniBackend, LabelRuntime, image_packets, packet
+        from types import SimpleNamespace
+        backend = LabelTiMiniBackend()
+        connection = SimpleNamespace(send_standard_payload=AsyncMock(), send_control_packet=AsyncMock())
+        backend._connected = SimpleNamespace(_connection=connection)
+        backend.runtime = LabelRuntime()
+        backend.runtime.handle_notification(Mock(), packet(0xA3, b'\0'))
+        backend.pump = AsyncMock()
+        image = Image.new('1', (384, 240), 1)
+        await backend.print_image(image, 3)
+        connection.send_standard_payload.assert_awaited_once_with(b''.join(image_packets(image)))
+        connection.send_control_packet.assert_not_awaited()
+        backend.pump.assert_awaited_once_with(3)

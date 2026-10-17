@@ -139,6 +139,7 @@ class LabelTiMiniBackend(TiMiniBackend):
             return any(f.opcode == 0xF0 and f.payload == b'\x01'
                        for f in decoder.feed(data))
         with self.runtime.operation():
+            log.debug("TX F0 positioning start")
             await self.connection.send_control_packet_wait_notification(
                 packet(0xF0, bytes.fromhex('008320')), label='label positioning F0',
                 match=match, timeout=timeout, required=True)
@@ -164,17 +165,15 @@ class LabelTiMiniBackend(TiMiniBackend):
                 timeout=self.timeout)
             if not sent:
                 raise RuntimeError("TiMini control write unavailable")
+            log.debug("Motion write returned; waiting %s seconds (not completion ACK)", settle)
             await self.pump(settle)
+            log.debug("Motion wait finished; reverse=%s", reverse)
 
     async def print_image(self, image, settle):
         packets = tuple(image_packets(image))  # Validate/build before sending.
         with self.runtime.operation():
-            for data in packets:
-                log.debug("TX %s", data.hex(" "))
-                # Preserve the working experiment's conservative 20-byte pacing.
-                for offset in range(0, len(data), 20):
-                    sent = await self.connection.send_control_packet(data[offset:offset + 20], timeout=self.timeout)
-                    if not sent:
-                        raise RuntimeError('TiMini control write unavailable')
-                    await asyncio.sleep(0.01)
+            payload = b''.join(packets)
+            log.debug("Raster send start: rows=%s bytes=%s transport=TiMini-standard", image.height, len(payload))
+            await self.connection.send_standard_payload(payload)
+            log.debug("Raster send finished; settling=%s (not completion ACK)", settle)
             await self.pump(settle)

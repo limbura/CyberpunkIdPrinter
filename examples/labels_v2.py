@@ -27,6 +27,7 @@ def arguments():
     p.add_argument('--scan-timeout', type=float, default=15)
     p.add_argument('--position-timeout', type=float, default=20)
     p.add_argument('--settle', type=float, default=3)
+    p.add_argument('--motion-settle', type=float, default=5)
     return p.parse_args()
 
 
@@ -60,7 +61,7 @@ async def main(args):
         media=MediaConfig(paper_type=PaperType.LABELS, roll_width_mm=40, offset_x_mm=-4),
         settings=LabelSettings(feed_mm=args.feed_mm, retract_mm=args.retract_mm,
                                confirmation=args.confirmation, position_timeout=args.position_timeout,
-                               settle_seconds=args.settle),
+                               settle_seconds=args.settle, motion_settle_seconds=args.motion_settle),
         timeout=args.timeout, connect_attempts=args.attempts,
         scan_timeout=args.scan_timeout, on_event=event)
 

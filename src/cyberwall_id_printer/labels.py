@@ -30,16 +30,17 @@ class LabelSettings:
     confirmation: RemovalConfirmation = RemovalConfirmation.ALWAYS
     position_timeout: float = 20.0
     settle_seconds: float = 3.0
+    motion_settle_seconds: float = 5.0
 
     def __post_init__(self):
         object.__setattr__(self, 'confirmation', RemovalConfirmation(self.confirmation))
-        for key in ('feed_mm', 'retract_mm', 'position_timeout', 'settle_seconds'):
+        for key in ('feed_mm', 'retract_mm', 'position_timeout', 'settle_seconds', 'motion_settle_seconds'):
             value = getattr(self, key)
             if isinstance(value, bool) or not isfinite(value) or value <= 0:
                 raise ValueError(f'{key} must be finite and positive')
         if not 0.25 <= self.feed_mm <= 25 or not 0.25 <= self.retract_mm <= 25:
             raise ValueError('Tested feed/retract range is 0.25–25 mm')
-        if self.settle_seconds < 2:
+        if self.settle_seconds < 2 or self.motion_settle_seconds < 2:
             raise ValueError('settle_seconds must be at least 2 (completion is not acknowledged)')
 
 
@@ -221,7 +222,7 @@ class LabelPrinter:
                     self._confirmed = False
                     self._event(stage)
                     await self._backend.move(self.settings.retract_mm, reverse=True,
-                                             settle=self.settings.settle_seconds)
+                                             settle=self.settings.motion_settle_seconds)
                     stage = 'positioning'
                     await self._position()
                 elif self._recovery:
@@ -236,7 +237,7 @@ class LabelPrinter:
                 self._event(stage)
                 epoch = self._epoch
                 await self._backend.move(self.settings.feed_mm, reverse=False,
-                                         settle=self.settings.settle_seconds)
+                                         settle=self.settings.motion_settle_seconds)
                 await self._status()
                 if self._epoch != epoch:
                     raise PrinterError('Printer condition changed during presentation')
