@@ -167,23 +167,34 @@ class TiMiniBackend:
         # Use the configured timeout here as well as in standalone scan().
         discovery = Discovery(catalog)
         devices = []
-        # Address-targeted BLE scanning stops as soon as the requested peripheral
-        # advertises. Do not make every successful connection wait scan_timeout.
+        # BLE advertisements often arrive without a name first. Wait for the
+        # advertisement carrying the model name, not merely the MAC address.
         from timiniprint.transport.bluetooth.types import DeviceInfo, DeviceTransport
         from bleak import BleakScanner
         import time
         started = time.monotonic()
+        found = None
+        target_name = None
+
+        def target_with_name(device, advertisement):
+            nonlocal target_name
+            if device.address.casefold() != address.casefold():
+                return False
+            target_name = advertisement.local_name or device.name or ""
+            return bool(target_name)
+
         try:
-            found = await BleakScanner.find_device_by_address(address, timeout=self.scan_timeout)
+            found = await BleakScanner.find_device_by_filter(
+                target_with_name, timeout=self.scan_timeout)
             if found is not None:
                 endpoint = DeviceInfo(
-                    name=found.name or "", address=found.address, paired=False,
-                    transport=DeviceTransport.BLE,
+                    name=target_name or found.name or "", address=found.address,
+                    paired=False, transport=DeviceTransport.BLE,
                 )
                 devices = discovery.devices_from_scan([endpoint])
                 logging.getLogger(__name__).info(
-                    "Targeted BLE discovery matched %s in %.2f s; resolved=%s",
-                    address, time.monotonic() - started, len(devices))
+                    "Targeted BLE discovery %s name=%r elapsed=%.2fs resolved=%s",
+                    address, endpoint.name, time.monotonic() - started, len(devices))
         except (OSError, RuntimeError) as exc:
             logging.getLogger(__name__).warning(
                 "Targeted BLE discovery failed (%s); using regular discovery", exc)
@@ -200,7 +211,12 @@ class TiMiniBackend:
         capabilities_for(device)  # Refuse unsupported families before device initialization.
         from .ble_connector import connector_with_timeout
         options = self._connection_options(device)
-        connected = await connect(device, connector_with_timeout(self.timeout), timeout=self.timeout, **options)
+        # Reuse the Windows BLEDevice in TiMini's private BLE event loop to
+        # avoid its redundant five-second scan; never reuse it on macOS.
+        import sys
+        cached = found if found is not None and devices and sys.platform == "win32" else None
+        connector = connector_with_timeout(self.timeout, ble_device=cached)
+        connected = await connect(device, connector, timeout=self.timeout, **options)
         try:
             capabilities = capabilities_for(connected.printer_device())
         except BaseException:
