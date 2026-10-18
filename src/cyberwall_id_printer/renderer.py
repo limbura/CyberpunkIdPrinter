@@ -1,8 +1,5 @@
-"""CYBERWALL segment label renderer: four fixed layouts, Python 3.11+, Pillow.
+"""Рисование наклейки ID: 4 варианта наклейки. Python 3.11+, Pillow."""
 
-Pure layout/raster module: no database, Bluetooth or printer side effects.
-Coordinates are drawn directly on the final monochrome pixel grid.
-"""
 from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
@@ -50,20 +47,23 @@ LATIN = {'A':'abcefg','B':'abcdefg','C':'afed','D':'abcdhi','E':'afged',
 GLYPHS = {**DIGITS, **CYRILLIC, **LATIN, '-':'g', '.':'', "'":'', '’':''}
 BACKGROUND = tuple('abcdef') + tuple('hijklmno')  # split middle bar
 
+
 class LabelMode(str, Enum):
-    ID_NAME = "id-name"
-    BLANK_ID_NAME = "blank-id-name"
-    ID_ONLY = "id-only"
-    BLANK_ID_ONLY = "blank-id-only"
+    """Варианты наклеек"""
+    ID_NAME = "id-name"					# ID и имя
+    BLANK_ID_NAME = "blank-id-name"		# Пустой шаблон для ID и имени
+    ID_ONLY = "id-only"					# Только ID крупно
+    BLANK_ID_ONLY = "blank-id-only"		# Пустой шаблон для только ID
 
 
 @dataclass(frozen=True)
 class LabelConfig:
-    width_mm: float = 40.0
-    height_mm: float = 30.0
-    dpi: float = 203.2  # 8 dots/mm; calibrate against the actual printer
-    inactive: bool = True
-    decorations: bool = True
+    """Настройки наклейки"""
+    width_mm: float = 40.0				# Ширина наклейки
+    height_mm: float = 30.0				# Высота наклейки
+    dpi: float = 203.2  				# Разрешение. 8 dots/mm; calibrate against the actual printer
+    inactive: bool = True				# Отображение неактивных сегментов символов
+    decorations: bool = True			# Декоративные элементы наклейки
     mode: LabelMode = LabelMode.ID_NAME
 
     @property

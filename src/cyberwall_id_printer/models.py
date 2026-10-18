@@ -1,28 +1,24 @@
+"""Описывает общие данные: параметры бумаги, возможности принтера и результат отправки задания."""
 from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 from math import isfinite
 
-
 class PaperType(str, Enum):
+    """Тип бумаги"""
     CONTINUOUS = "continuous"
     LABELS = "labels"
 
 
 @dataclass(frozen=True)
 class MediaConfig:
-    """Layout geometry, not a command to resize a printer's physical paper.
-
-    width/height describe one design; roll_width includes the liner. Offset is
-    relative to the head centre, positive to the right. Hardware label mode
-    requires a supported sensor recipe, never simulated feed distances.
-    """
-    paper_type: PaperType = PaperType.CONTINUOUS
-    width_mm: float = 40.0
-    height_mm: float = 30.0
-    roll_width_mm: float = 57.0
-    offset_x_mm: float = 0.0
-    dpi: float = 203.2
+    """Параметры печати"""
+    paper_type: PaperType = PaperType.CONTINUOUS	# Тип бумаги
+    width_mm: float = 40.0							# Ширина печатываемого изображения (мм)
+    height_mm: float = 30.0							# Высота печатываемого изображения (мм)
+    roll_width_mm: float = 57.0						# Полная ширина ленты включая подложку
+    offset_x_mm: float = 0.0						# Смещение изображения относительно центра принтера, -5.0 = влево на 5мм
+    dpi: float = 203.2								# Разрешение печати в точках на дюйм
 
     def __post_init__(self):
         object.__setattr__(self, "paper_type", PaperType(self.paper_type))
@@ -38,27 +34,29 @@ class MediaConfig:
 
 @dataclass(frozen=True)
 class PrinterCapabilities:
-    name: str
-    address: str
-    profile: str
-    head_width_px: int
-    nominal_dpi: float
-    continuous: bool = True
-    hardware_labels: bool = False
-    calibration: bool = False
-    label_note: str = "Label boundary commands are not implemented for this profile."
+    """Параметры принтера"""
+    name: str						# Название принтера
+    address: str					# Bluetooth адрес
+    profile: str					# Профиль протокола принтера TiMini, например v5g_small_203
+    head_width_px: int				# Ширина печати печатающей головки
+    nominal_dpi: float				# Разрешение печатающей головки
+    continuous: bool = True			# Поддержка печати на непрерывной ленте
+    hardware_labels: bool = False	# Поддержка аппаратной работы с отдельными стикерами и их границами
+    calibration: bool = False		# Поддержка команды калибровки положения стикеров
+    label_note: str = "Label boundary commands are not implemented for this profile."  # Пояснения о возможностях принтера
 
 
 @dataclass(frozen=True)
 class PrintResult:
-    """Transmission success; does not confirm a physical sticker was printed."""
-    width_px: int
-    height_px: int
-    status: str = "sent"
-    physical_completion_confirmed: bool = False
-    copies: int = 1
+    """Результаты печати"""
+    width_px: int								# Ширина отправленного на печать изображения
+    height_px: int								# Высота отправленного на печать изображения
+    status: str = "sent"						# Статус задания
+    physical_completion_confirmed: bool = False	# Принтер подтвердил физическое завершение выполнения задания
+    copies: int = 1								# Количество экземпляров в задании
 
 
 def validate_copies(copies: int) -> None:
+    """Проверка что заданное количество копий - целое число от 1 до 100"""
     if type(copies) is not int or not 1 <= copies <= 100:
         raise ValueError("copies must be an integer from 1 to 100")

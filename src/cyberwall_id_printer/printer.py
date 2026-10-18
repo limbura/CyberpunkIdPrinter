@@ -1,3 +1,4 @@
+"""Обычная печать средствами библиотеки TiMini"""
 from __future__ import annotations
 import asyncio
 from .backends.base import PrinterBackend

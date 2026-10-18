@@ -1,4 +1,4 @@
-"""Single-label peel/retract workflow. No automatic replay of physical actions."""
+"""Алгоритм печати с калибровкой для отдельных стикеров."""
 from __future__ import annotations
 import asyncio
 import logging

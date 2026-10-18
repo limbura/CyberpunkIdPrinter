@@ -13,7 +13,7 @@ __all__ = ["LabelConfig", "LabelMode", "render_label", "format_id", "normalize_n
            "TiMiniBackend", "PrinterBackend", "PrinterError", "BackendUnavailable",
            "UnsupportedFeature", "ConnectionStateError", "PrintTransmissionError"]
 
-from .labels import (LabelPrinter, LabelSettings, LabelState, RemovalConfirmation,
+from .label_printer import (LabelPrinter, LabelSettings, LabelState, RemovalConfirmation,
                      RemovalRequired, LabelOperationError)
 __all__ += ["LabelPrinter", "LabelSettings", "LabelState", "RemovalConfirmation",
             "RemovalRequired", "LabelOperationError"]

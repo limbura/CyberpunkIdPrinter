@@ -1,4 +1,5 @@
-"""Blocking facade for scripts. GUI applications should use a worker thread."""
+"""Обёртка над обычным Printer, позволяющая вызывать методы без await.
+Blocking facade for scripts. GUI applications should use a worker thread."""
 import asyncio
 import threading
 from .printer import Printer
