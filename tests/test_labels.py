@@ -4,7 +4,7 @@ import unittest
 from unittest.mock import AsyncMock, Mock, patch
 from PIL import Image
 from cyberwall_id_printer import (LabelPrinter, LabelSettings, LabelState, RemovalRequired,
-                                  LabelOperationError, TiMiniBackend)
+                                  LabelOperationError, TiMiniBackend, ConnectionStateError)
 
 
 class FakeBackend:
@@ -38,12 +38,14 @@ class LabelTests(unittest.IsolatedAsyncioTestCase):
     async def test_cycle_retract_is_start_of_next_print(self):
         p = await self.create()
         image = Image.new('1', (384, 24), 1)
-        with self.assertRaises(RemovalRequired): await p.print_image(image)
-        self.assertEqual(p._backend.calls, ['F0'])
-        await p.confirm_removed()
+        self.assertEqual(p.state, LabelState.UNKNOWN)
+        self.assertEqual(p._backend.calls, [])
         await p.print_image(image)
         self.assertEqual(p._backend.calls, ['F0', 'print', ('feed', 15)])
+        before = list(p._backend.calls)
         with self.assertRaises(RemovalRequired): await p.print_image(image)
+        self.assertEqual(p._backend.calls, before)
+        self.assertEqual(p.state, LabelState.PRESENTED)
         await p.confirm_removed()
         await p.print_image(image)
         self.assertEqual(p._backend.calls[-4:], [('reverse', 25), 'F0', 'print', ('feed', 15)])
@@ -66,29 +68,30 @@ class LabelTests(unittest.IsolatedAsyncioTestCase):
         await p.print_image(image)
         self.assertEqual(events[:3], [('motion_start', True, 10), 'motion_finished', 'F0'])
 
-    async def test_never_and_recovery_modes(self):
+    async def test_never_mode_does_not_require_confirmation(self):
         image = Image.new('1', (384, 24), 1)
-        for mode in ('never', 'recovery'):
-            p = await self.create(mode)
-            if mode == 'recovery':
-                with self.assertRaises(RemovalRequired): await p.print_image(image)
-                await p.confirm_removed()
-            await p.print_image(image)
-            await p.print_image(image)
-            self.assertEqual(p._backend.calls.count('print'), 2)
+        p = await self.create('never')
+        await p.print_image(image)
+        await p.print_image(image)
+        self.assertEqual(p._backend.calls, [
+            'F0', 'print', ('feed', 15),
+            ('reverse', 25), 'F0', 'print', ('feed', 15),
+        ])
 
     async def test_error_normal_burst_invalidates_position_and_confirmation(self):
-        p = await self.create('recovery')
+        p = await self.create()
         image = Image.new('1', (384, 24), 1)
-        await p.recover()
-        await p.confirm_removed()
         await p.print_image(image)
+        await p.confirm_removed()
+        self.assertTrue(p._confirmed)
         p._backend.epoch += 2  # Two faults, already back to normal.
         await p.poll()
         self.assertEqual(p.state, LabelState.UNKNOWN)
+        self.assertFalse(p._confirmed)
         before = len(p._backend.calls)
-        with self.assertRaises(RemovalRequired): await p.print_image(image)
-        self.assertEqual(p._backend.calls[before:], ['F0'])
+        await p.print_image(image)
+        self.assertEqual(p._backend.calls[before:], ['F0', 'print', ('feed', 15)])
+        self.assertEqual(p.state, LabelState.PRESENTED)
 
     async def test_fault_does_not_kill_session_and_cannot_confirm_unknown(self):
         p = await self.create()
@@ -99,8 +102,12 @@ class LabelTests(unittest.IsolatedAsyncioTestCase):
         await p.poll()
         with self.assertRaises(RuntimeError): await p.confirm_removed()
         await p.recover()
-        await p.confirm_removed()
         self.assertEqual(p.state, LabelState.READY)
+        self.assertEqual(p._backend.calls, ['F0'])
+        with self.assertRaises(ConnectionStateError):
+            await p.confirm_removed()
+        await p.print_image(Image.new('1', (384, 24), 1))
+        self.assertEqual(p._backend.calls, ['F0', 'print', ('feed', 15)])
 
     async def test_no_replay_after_failed_print_or_presentation(self):
         for stage, expected in [('print', 'printing'), ('feed', 'presenting')]:
@@ -122,14 +129,18 @@ class LabelTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_reconnect_does_not_move_or_keep_confirmation(self):
         p = await self.create()
-        await p.recover()
+        image = Image.new('1', (384, 24), 1)
+        await p.print_image(image)
         await p.confirm_removed()
+        self.assertTrue(p._confirmed)
         await p.disconnect()
         before = list(p._backend.calls)
         await p.connect('test')
         self.assertEqual(p._backend.calls, before)
         self.assertEqual(p.state, LabelState.UNKNOWN)
         self.assertFalse(p._confirmed)
+        await p.print_image(image)
+        self.assertEqual(p._backend.calls[len(before):], ['F0', 'print', ('feed', 15)])
 
     async def test_invalid_image_never_moves(self):
         p = await self.create('never')
@@ -155,7 +166,7 @@ class LabelTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(b._connect_once.await_count, 2)
 
     def test_settings_validation(self):
-        for kwargs in ({'feed_mm': 26}, {'retract_mm': 0}, {'settle_seconds': 0.1}, {'confirmation': 'yes'}):
+        for kwargs in ({'feed_mm': 26}, {'retract_mm': 0}, {'settle_seconds': 0.1}, {'confirmation': 'yes'}, {'confirmation': 'recovery'}):
             with self.assertRaises(ValueError): LabelSettings(**kwargs)
 
 
@@ -234,3 +245,4 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         connection.send_standard_payload.assert_awaited_once_with(b''.join(image_packets(image)))
         connection.send_control_packet.assert_not_awaited()
         backend.pump.assert_awaited_once_with(3)
+

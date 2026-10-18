@@ -64,6 +64,7 @@ class TiMiniTests(unittest.TestCase):
 
     def test_scan_and_connection_plan_never_use_classic(self):
         import asyncio
+        from types import SimpleNamespace
         from unittest.mock import AsyncMock, Mock
         from cyberwall_id_printer import TiMiniBackend
         from timiniprint.devices import bluetooth_connection_plan
@@ -83,6 +84,17 @@ class TiMiniTests(unittest.TestCase):
             connected.printer_device.return_value = device
             return connected
 
+        ble_device = SimpleNamespace(address=address, name=None)
+
+        async def find_device(predicate, *, timeout):
+            self.assertEqual(timeout, 15)
+            self.assertFalse(predicate(
+                SimpleNamespace(address="00:00:00:00:00:00", name="MX10"),
+                SimpleNamespace(local_name="MX10")))
+            self.assertFalse(predicate(ble_device, SimpleNamespace(local_name=None)))
+            self.assertTrue(predicate(ble_device, SimpleNamespace(local_name="MX10")))
+            return ble_device
+
         async def scenario():
             backend = TiMiniBackend()
             found = await backend.scan()
@@ -98,9 +110,13 @@ class TiMiniTests(unittest.TestCase):
         with patch("timiniprint.transport.bluetooth.backend._get_classic_adapter",
                    side_effect=AssertionError("Classic must not be used")) as classic, \
              patch("timiniprint.transport.bluetooth.backend._get_ble_adapter", return_value=ble), \
-             patch("timiniprint.printing.connected.connect_printer", side_effect=connect):
+             patch("timiniprint.printing.connected.connect_printer", side_effect=connect), \
+             patch("bleak.BleakScanner.find_device_by_filter",
+                   new=AsyncMock(side_effect=find_device)) as targeted_scan:
             asyncio.run(scenario())
             classic.assert_not_called()
+            targeted_scan.assert_awaited_once()
+            ble.scan_blocking.assert_called_once()
 
     def test_actual_batch_keeps_page_metadata_and_protocol_steps(self):
         from unittest.mock import Mock
@@ -152,3 +168,4 @@ class TiMiniTests(unittest.TestCase):
             asyncio.run(scenario())
         finally:
             loop.close()
+
