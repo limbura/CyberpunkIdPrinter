@@ -308,7 +308,7 @@ await printer.print_id("123456789", "Роза фон Праунхайм")
 ```mermaid
 flowchart TD
     C["cli.py или SyncPrinter"] --> P["printer.py: Printer"]
-    E["examples/labels_v2.py"] --> L["labels.py: LabelPrinter"]
+    E["examples/labels_v2.py"] --> L["label_printer.py: LabelPrinter"]
     P --> R["layout.py → renderer.py"]
     L --> R
     P --> T["backends/timini.py"]
