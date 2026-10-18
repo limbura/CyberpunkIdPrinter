@@ -11,13 +11,12 @@ from .models import MediaConfig, PaperType, PrintResult
 from .renderer import LabelMode
 from .layout import render_for_head
 
-
+# Когда требуется подтверждение снятия стикера после печати (для защиты от зажевывания при обратном втягивании)
 class RemovalConfirmation(str, Enum):
-    ALWAYS = 'always'
-    RECOVERY = 'recovery'
-    NEVER = 'never'
+    ALWAYS = 'always'   # Подтверждение перед каждым обратным втягиванием
+    NEVER = 'never'     # Подтверждений не требуется
 
-
+# Состояния принтера
 class LabelState(str, Enum):
     DISCONNECTED = 'disconnected'
     UNKNOWN = 'unknown'
@@ -82,7 +81,6 @@ class LabelPrinter:
         self._loop = None
         self._epoch = None
         self._confirmed = False
-        self._recovery = True
         self._last_status = None
         self._on_event = on_event
         self._print_attempt = 0
@@ -105,7 +103,6 @@ class LabelPrinter:
     def _unknown(self):
         self.state = LabelState.UNKNOWN
         self._confirmed = False
-        self._recovery = True
         self._event('position_unknown')
 
     async def connect(self, address):
@@ -173,8 +170,8 @@ class LabelPrinter:
         self._check_loop()
         async with self._lock:
             await self._status()
-            if self.state not in (LabelState.READY, LabelState.PRESENTED):
-                raise ConnectionStateError('Position first, then remove exposed labels and confirm')
+            if self.state != LabelState.PRESENTED:
+                raise ConnectionStateError('Removal confirmation is only needed after label presentation')
             self._confirmed = True
             self._event('removal_confirmed')
 
@@ -208,10 +205,8 @@ class LabelPrinter:
 
     def _require_removal(self):
         mode = self.settings.confirmation
-        required = mode == RemovalConfirmation.ALWAYS or (
-            mode == RemovalConfirmation.RECOVERY and self._recovery)
-        if required and not self._confirmed:
-            self._event('removal_required', recovery=self._recovery)
+        if self.settings.confirmation == RemovalConfirmation.ALWAYS and not self._confirmed:
+            self._event('removal_required')
             raise RemovalRequired('Remove all exposed labels, close cover, confirm removal; then submit print again')
 
     async def print_image(self, image):
@@ -225,8 +220,8 @@ class LabelPrinter:
             attempt = self._print_attempt
             stage = 'status'
             started = time.monotonic()
-            log.info("PRINT_ATTEMPT #%s start state=%s recovery=%s confirmed=%s raster=%sx%s",
-                     attempt, self.state.value, self._recovery, self._confirmed, image.width, image.height)
+            log.info("PRINT_ATTEMPT #%s start state=%s confirmed=%s raster=%sx%s",
+                     attempt, self.state.value, self._confirmed, image.width, image.height)
             try:
                 await self._status()
                 log.info("PRINT_ATTEMPT #%s status_checked state=%s status=%s", attempt, self.state.value, self._last_status)
@@ -245,10 +240,6 @@ class LabelPrinter:
                                              settle=self.settings.motion_settle_seconds)
                     stage = 'positioning'
                     await self._position()
-                elif self._recovery:
-                    # The recovery F0 itself may expose an extra label.
-                    self._require_removal()
-                self._recovery = False
                 self._confirmed = False
                 stage = 'printing'
                 log.info("PRINT_ATTEMPT #%s raster_phase start elapsed=%.3fs", attempt, time.monotonic() - started)
@@ -292,7 +283,6 @@ class LabelPrinter:
                 self.state = LabelState.DISCONNECTED
                 self.capabilities = None
                 self._confirmed = False
-                self._recovery = True
                 self._event('disconnected')
 
     async def __aenter__(self):

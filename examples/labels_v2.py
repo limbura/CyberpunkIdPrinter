@@ -22,7 +22,7 @@ def arguments():
     p.add_argument('--timini-path', default=None)
     p.add_argument('--feed-mm', type=float, default=15)
     p.add_argument('--retract-mm', type=float, default=25)
-    p.add_argument('--confirmation', choices=['always', 'recovery', 'never'], default='always')
+    p.add_argument('--confirmation', choices=['always', 'never'], default='always')
     p.add_argument('--attempts', type=int, default=2)
     p.add_argument('--timeout', type=float, default=20)
     p.add_argument('--scan-timeout', type=float, default=15)
