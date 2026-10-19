@@ -203,6 +203,25 @@ class LabelPrinter:
                 self._unknown()
                 raise
 
+    async def move_paper(self, mm, *, reverse=False, removed=False):
+        """Manual motion invalidates position; reverse requires explicit removal."""
+        if type(mm) not in (int, float) or not isfinite(mm) or not 0.25 <= mm <= 25:
+            raise ValueError('Manual motion must be within 0.25–25 mm')
+        if reverse and not removed:
+            raise RemovalRequired('Remove exposed labels before manual reverse')
+        self._check_loop()
+        async with self._lock:
+            if self.state == LabelState.DISCONNECTED:
+                raise ConnectionStateError('Not connected')
+            try:
+                await self._status()
+                self._unknown()
+                await self._backend.move(mm, reverse=reverse,
+                                         settle=self.settings.motion_settle_seconds)
+                await self._status()
+            finally:
+                self._unknown()
+
     def _require_removal(self):
         mode = self.settings.confirmation
         if self.settings.confirmation == RemovalConfirmation.ALWAYS and not self._confirmed:
