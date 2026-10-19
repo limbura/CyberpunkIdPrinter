@@ -16,7 +16,7 @@ from timiniprint.protocol.encoding import pack_line
 from timiniprint.protocol.families.v5g import decode_error_status
 from timiniprint.printing.runtime.v5g import V5GRuntimeController
 from .timini import TiMiniBackend
-from ..errors import UnsupportedFeature, PrinterError
+from ..errors import UnsupportedFeature, PrinterError, DeviceStatusError
 
 FAMILY = ProtocolFamily.V5G
 
@@ -34,6 +34,7 @@ class LabelRuntime(V5GRuntimeController):
         self._epoch = 0
         self._armed_epoch = None
         self._updated = 0.0
+        self._last_fault = None
 
     def snapshot(self):
         with self._guard:
@@ -50,16 +51,19 @@ class LabelRuntime(V5GRuntimeController):
                     # Preserve evidence even if error/normal arrive in one read.
                     if self._status not in (0, 0x80):
                         self._epoch += 1
+                        self._last_fault = self._status
 
     def check(self):
         with self._guard:
             status, epoch = self._status, self._epoch
             armed = self._armed_epoch
+            fault = self._last_fault
         if status not in (0, 0x80):
             reason = decode_error_status(status) if status is not None else None
-            raise PrinterError(f"Printer not ready: {reason.value if reason else 'unknown status'} ({status})")
+            raise DeviceStatusError(reason.value if reason else "unknown", status)
         if armed is not None and armed != epoch:
-            raise PrinterError("Printer condition changed during operation; position is unknown")
+            reason = decode_error_status(fault) if fault is not None else None
+            raise DeviceStatusError(reason.value if reason else "unknown", fault)
 
     async def before_write(self, session, *, size, timeout):
         with self._guard:
@@ -123,6 +127,13 @@ class LabelTiMiniBackend(TiMiniBackend):
         # Pinned TiMini boundary; raw control operations are exposed here only.
         return self._connected._connection
 
+    @staticmethod
+    def status_reason(status):
+        if status in (0, 0x80):
+            return "normal"
+        reason = decode_error_status(status) if status is not None else None
+        return reason.value if reason else "unknown"
+
     async def query_status(self):
         decoder = PrefixedPacketStreamDecoder(FAMILY)
         def match(data):
@@ -177,3 +188,4 @@ class LabelTiMiniBackend(TiMiniBackend):
             await self.connection.send_standard_payload(payload)
             log.debug("Raster send finished; settling=%s (not completion ACK)", settle)
             await self.pump(settle)
+

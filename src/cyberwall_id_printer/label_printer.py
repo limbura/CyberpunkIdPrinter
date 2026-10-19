@@ -6,7 +6,7 @@ import time
 from dataclasses import dataclass
 from enum import Enum
 from math import isfinite
-from .errors import PrinterError, ConnectionStateError
+from .errors import PrinterError, ConnectionStateError, DeviceStatusError
 from .models import MediaConfig, PaperType, PrintResult
 from .renderer import LabelMode
 from .layout import render_for_head
@@ -50,7 +50,9 @@ class RemovalRequired(PrinterError):
 
 
 class LabelOperationError(PrinterError):
-    def __init__(self, stage):
+    def __init__(self, stage, cause=None):
+        self.reason = getattr(cause, "reason", None)
+        self.status = getattr(cause, "status", None)
         self.stage = stage
         self.may_have_printed = stage in ('printing', 'presenting')
         super().__init__(f'Label operation failed at {stage}; position unknown; no retry performed')
@@ -82,6 +84,8 @@ class LabelPrinter:
         self._epoch = None
         self._confirmed = False
         self._last_status = None
+        self.device_status = "unknown"
+        self.last_error = None
         self._on_event = on_event
         self._print_attempt = 0
 
@@ -96,9 +100,17 @@ class LabelPrinter:
         if self._on_event:
             # Observer failures must not interrupt a mechanical operation.
             try:
-                self._on_event(dict(event=kind, state=self.state.value, **data))
+                self._on_event(dict(event=kind, state=self.state.value, device_status=self.device_status, **data))
             except Exception:
                 pass
+
+    def _device(self, reason, status=None):
+        changed = status != self._last_status
+        self.device_status = reason
+        self._last_status = status
+        if changed:
+            self._event("status", status=status)
+        self._event("device_status", status=status)
 
     def _unknown(self):
         self.state = LabelState.UNKNOWN
@@ -119,6 +131,7 @@ class LabelPrinter:
                 self._backend = LabelTiMiniBackend(**self._backend_options)
             self.capabilities = await self._backend.connect(address)
             self._epoch = None
+            self._device("unknown")
             self._unknown()
             self._event('connected')
             return self.capabilities
@@ -131,6 +144,7 @@ class LabelPrinter:
         try:
             status, epoch, updated = await self._backend.query_status()
         except BaseException:
+            self._device("unknown")
             self._unknown()
             raise
         log.debug("STATUS reply status=%s epoch=%s last_epoch=%s elapsed=%.3fs updated=%.6f",
@@ -138,12 +152,11 @@ class LabelPrinter:
         if self._epoch is not None and epoch != self._epoch:
             self._unknown()
         self._epoch = epoch
-        if status != self._last_status:
-            self._last_status = status
-            self._event('status', status=status)
+        reason = self._backend.status_reason(status)
+        self._device(reason, status)
         if status not in (0, 0x80):
             self._unknown()
-            raise PrinterError(f'Printer not ready, status={status}; check paper/cover, temperature and battery')
+            raise DeviceStatusError(reason, status)
         return status
 
     async def check_connection(self):
@@ -157,6 +170,7 @@ class LabelPrinter:
             except Exception:
                 alive = False
             if not alive:
+                self._device("unknown")
                 self._unknown()
             return alive
 
@@ -199,7 +213,9 @@ class LabelPrinter:
                 self._unknown()
                 await self._position()
                 self._event('recovered')
-            except BaseException:
+            except BaseException as exc:
+                if isinstance(exc, DeviceStatusError):
+                    self._device(exc.reason, exc.status)
                 self._unknown()
                 raise
 
@@ -219,6 +235,9 @@ class LabelPrinter:
                 await self._backend.move(mm, reverse=reverse,
                                          settle=self.settings.motion_settle_seconds)
                 await self._status()
+            except DeviceStatusError as exc:
+                self._device(exc.reason, exc.status)
+                raise
             finally:
                 self._unknown()
 
@@ -284,9 +303,15 @@ class LabelPrinter:
                 self._unknown()
                 raise
             except Exception as exc:
-                log.exception("PRINT_ATTEMPT #%s failed stage=%s elapsed=%.3fs", attempt, stage, time.monotonic() - started)
+                if isinstance(exc, DeviceStatusError):
+                    self._device(exc.reason, exc.status)
+                    log.info("PRINT_ATTEMPT #%s stopped: %s", attempt, exc)
+                    log.debug("Device fault details", exc_info=True)
+                else:
+                    log.exception("PRINT_ATTEMPT #%s failed stage=%s elapsed=%.3fs", attempt, stage, time.monotonic() - started)
                 self._unknown()
-                raise LabelOperationError(stage) from exc
+                self.last_error = LabelOperationError(stage, exc)
+                raise self.last_error from exc
 
     async def print_id(self, account_id=None, name=None, *, mode=LabelMode.ID_NAME):
         image = render_for_head(account_id, name, self.media, 384, mode=mode)
@@ -300,6 +325,7 @@ class LabelPrinter:
                     await self._backend.disconnect()
             finally:
                 self.state = LabelState.DISCONNECTED
+                self._device("unknown")
                 self.capabilities = None
                 self._confirmed = False
                 self._event('disconnected')
@@ -309,3 +335,4 @@ class LabelPrinter:
 
     async def __aexit__(self, *exc):
         await self.disconnect()
+
