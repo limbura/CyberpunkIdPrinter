@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cyberwall_id_printer"
-version = "0.4.1"
+dynamic = ["version"]
 description = "Segmented Cyrillic ID labels and Bluetooth thermal printing via external TiMini Print"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -27,3 +27,6 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 cyberwall_id_printer = ["py.typed"]
+
+[tool.setuptools.dynamic]
+version = {attr = "cyberwall_id_printer.__version__"}
