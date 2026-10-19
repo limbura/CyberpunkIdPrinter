@@ -15,6 +15,10 @@ class FakeBackend:
         self.fail = None
     async def connect(self, address): return Mock(head_width_px=384)
     async def disconnect(self): self.calls.append('disconnect')
+    @staticmethod
+    def status_reason(status):
+        return {0: 'normal', 0x80: 'normal', 1: 'paper_out'}.get(status, 'unknown')
+
     async def query_status(self): return self.status, self.epoch, 0
     async def position(self, timeout):
         self.calls.append('F0')
