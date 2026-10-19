@@ -58,8 +58,32 @@ class RendererTests(unittest.TestCase):
             self.assertEqual(render_label("000000000", ch).mode, "1")
         for value in ("123", "１２３４５６７８９", "123 456 789"):
             with self.assertRaises(ValueError): format_id(value)
-        for name in ("", "🦊", "А" * 100):
+        for name in ("", "А" * 100):
             with self.assertRaises(ValueError): render_label("123456789", name)
+
+    def test_unknown_name_characters_render_as_underscores(self):
+        for name, expected in [('Роза "Лис"', 'РОЗА _ЛИС_'),
+                               ('А🦊Б@В', 'А_Б_В'), ('🦊', '_'),
+                               ('А-Б_В', 'А-Б_В'), ('  Ёж\tЙод  ', 'ЁЖ ЙОД')]:
+            with self.subTest(name=name):
+                self.assertEqual(normalize_name(name), expected)
+                self.assertEqual(render_label('123456789', name).tobytes(),
+                                 render_label('123456789', expected).tobytes())
+                self.assertEqual(render_for_head('123456789', name, MediaConfig(), 384).size,
+                                 (384, 240))
+
+    def test_underscore_and_hyphen_are_distinct_visible_strokes(self):
+        from PIL import ImageDraw
+        from cyberwall_id_printer.renderer import glyph
+        images = []
+        for char in '_-':
+            image = Image.new('1', (40, 50), 1)
+            glyph(ImageDraw.Draw(image), char, 5, 5, 20, 30, 2, False)
+            dark = image.convert('L').point(lambda value: 255 - value)
+            images.append(dark.getbbox())
+        self.assertIsNotNone(images[0])
+        self.assertIsNotNone(images[1])
+        self.assertGreater(images[0][1], images[1][3])
 
     def test_bounds(self):
         for v in (float("nan"), float("inf"), -1, 0):
@@ -184,3 +208,4 @@ class SyncTests(unittest.TestCase):
         self.assertEqual(len(set(backend.loops)),1)
         self.assertTrue(backend.disconnected)
         with self.assertRaises(ConnectionStateError): p.connect("fake")
+

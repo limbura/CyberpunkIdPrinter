@@ -37,14 +37,14 @@ CYRILLIC = {
     'Ъ':'anocdi', 'Ы':'fendimc', 'Ь':'fegcd', 'Э':'abgcd',
     'Ю':'feobh icd'.replace(' ',''), 'Я':'abfglc',
 }
-# Latin uppercase are useful for optional Latin names; unknown glyphs fail
-# explicitly, never silently disappear or turn into placeholder squares.
+# Latin uppercase are useful for optional Latin names. Unsupported name
+# characters are replaced with a visible underscore by normalize_name().
 LATIN = {'A':'abcefg','B':'abcdefg','C':'afed','D':'abcdhi','E':'afged',
  'F':'afge','G':'afedcg','H':'febcg','I':'adhi','J':'bcd','K':'fekm',
  'L':'fed','M':'febcjk','N':'febcjm','O':'abcdef','P':'abfge',
  'Q':'abcdefm','R':'abfgem','S':'afgcd','T':'ahi','U':'febcd',
  'V':'felk','W':'febclm','X':'jklm','Y':'jki','Z':'adkl'}
-GLYPHS = {**DIGITS, **CYRILLIC, **LATIN, '-':'g', '.':'', "'":'', '’':''}
+GLYPHS = {**DIGITS, **CYRILLIC, **LATIN, '_':'d', '-':'g', '.':'', "'":'', '’':''}
 BACKGROUND = tuple('abcdef') + tuple('hijklmno')  # split middle bar
 
 
@@ -87,10 +87,7 @@ def normalize_name(name: str) -> str:
     result = ' '.join(unicodedata.normalize('NFC', name).upper().split())
     if not result:
         raise ValueError('Имя не должно быть пустым.')
-    missing = sorted(set(result) - set(GLYPHS) - {' '})
-    if missing:
-        raise ValueError('Нет сегментного рисунка для символов: ' + ', '.join(missing))
-    return result
+    return ''.join(char if char == ' ' or char in GLYPHS else '_' for char in result)
 
 
 def stroke(draw, start, end, width):
@@ -269,3 +266,4 @@ def render_label(account_id: str|int|None = None, name: str|None = None,
             for col in range(11):
                 cell(word[col] if col < len(word) else '',26+col*25,113+row*37,18,25)
     return image
+
