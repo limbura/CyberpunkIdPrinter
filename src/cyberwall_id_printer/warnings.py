@@ -7,3 +7,7 @@ class NameTruncatedWarning(UserWarning):
 
 class InvalidNameWarning(UserWarning):
     """A missing, non-string or whitespace-only name was omitted from the label."""
+
+
+class UnsupportedNameCharactersWarning(UserWarning):
+    """Unsupported name characters were replaced with underscores."""

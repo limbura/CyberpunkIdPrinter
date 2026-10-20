@@ -8,7 +8,7 @@ import re
 import unicodedata
 import warnings
 from PIL import Image, ImageDraw
-from .warnings import InvalidNameWarning, NameTruncatedWarning
+from .warnings import InvalidNameWarning, NameTruncatedWarning, UnsupportedNameCharactersWarning
 
 # Normalized segment endpoints. Seven-segment numerals use a..g only.
 SEGMENTS = {
@@ -95,7 +95,15 @@ def normalize_name(name: str) -> str:
             stacklevel=2,
         )
         return ""
-    return ''.join(char if char == ' ' or char in GLYPHS else '_' for char in result)
+    normalized = ''.join(char if char == ' ' or char in GLYPHS else '_' for char in result)
+    if normalized != result:
+        warnings.warn(
+            "В имени обнаружены неподдерживаемые символы, "
+            "они заменены на нижнее подчёркивание.",
+            UnsupportedNameCharactersWarning,
+            stacklevel=2,
+        )
+    return normalized
 
 
 def stroke(draw, start, end, width):

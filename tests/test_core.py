@@ -4,7 +4,7 @@ import warnings
 from PIL import Image
 from cyberwall_id_printer import (Printer, SyncPrinter, MediaConfig, PaperType,
     LabelConfig, LabelMode, render_label, format_id, normalize_name, PrinterCapabilities,
-    UnsupportedFeature, PrintTransmissionError, ConnectionStateError, NameTruncatedWarning, InvalidNameWarning)
+    UnsupportedFeature, PrintTransmissionError, ConnectionStateError, NameTruncatedWarning, InvalidNameWarning, UnsupportedNameCharactersWarning)
 from cyberwall_id_printer.layout import render_for_head
 
 
@@ -104,15 +104,32 @@ class RendererTests(unittest.TestCase):
                 self.assertEqual(normalize_name(name), "")
 
     def test_unknown_name_characters_render_as_underscores(self):
-        for name, expected in [('Роза "Лис"', 'РОЗА _ЛИС_'),
-                               ('А🦊Б@В', 'А_Б_В'), ('🦊', '_'),
-                               ('А-Б_В', 'А-Б_В'), ('  Ёж\tЙод  ', 'ЁЖ ЙОД')]:
-            with self.subTest(name=name):
+        cases = [('Роза "Лис"', 'РОЗА _ЛИС_'), ('А🦊Б@В', 'А_Б_В'),
+                 ('🦊🦊', '__'), ('А-Б_В', 'А-Б_В'), ('  Ёж\tЙод  ', 'ЁЖ ЙОД')]
+        for name, expected in cases:
+            for operation in (
+                lambda: normalize_name(name),
+                lambda: render_label('123456789', name),
+                lambda: render_for_head('123456789', name, MediaConfig(), 384),
+            ):
+                with self.subTest(name=name), warnings.catch_warnings(record=True) as caught:
+                    warnings.simplefilter('always')
+                    operation()
+                self.assertEqual([item.category for item in caught],
+                                 [UnsupportedNameCharactersWarning] if '🦊' in name or '"' in name else [])
+            with warnings.catch_warnings():
+                warnings.simplefilter('ignore', UnsupportedNameCharactersWarning)
                 self.assertEqual(normalize_name(name), expected)
                 self.assertEqual(render_label('123456789', name).tobytes(),
                                  render_label('123456789', expected).tobytes())
-                self.assertEqual(render_for_head('123456789', name, MediaConfig(), 384).size,
-                                 (384, 240))
+
+    def test_unknown_characters_and_truncation_warn_independently(self):
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter('always')
+            image = render_label('123456789', '🦊' * 12 + ' Б В Г')
+        self.assertEqual([item.category for item in caught],
+                         [UnsupportedNameCharactersWarning, NameTruncatedWarning])
+        self.assertEqual(image.tobytes(), render_label('123456789', '_' * 11 + ' Б В').tobytes())
 
     def test_underscore_and_hyphen_are_distinct_visible_strokes(self):
         from PIL import ImageDraw
@@ -213,6 +230,15 @@ class SessionTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(err.exception.may_have_printed)
             with self.assertRaises(ConnectionStateError): await p.print_id("123456789", "РОЗА")
             self.assertEqual(backend.sends,1)
+
+    async def test_unknown_characters_are_sent_despite_warning(self):
+        backend = FakeBackend()
+        async with Printer(backend) as printer:
+            await printer.connect("fake")
+            with self.assertWarns(UnsupportedNameCharactersWarning):
+                result = await printer.print_id("123456789", 'А🦊Б@В')
+        self.assertEqual(backend.sends, 1)
+        self.assertEqual(result.status, "sent")
 
     async def test_invalid_names_are_sent_despite_warning(self):
         backend = FakeBackend()
