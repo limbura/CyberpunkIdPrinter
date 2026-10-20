@@ -8,7 +8,7 @@ import re
 import unicodedata
 import warnings
 from PIL import Image, ImageDraw
-from .warnings import NameTruncatedWarning
+from .warnings import InvalidNameWarning, NameTruncatedWarning
 
 # Normalized segment endpoints. Seven-segment numerals use a..g only.
 SEGMENTS = {
@@ -157,7 +157,12 @@ def validate_content(account_id, name, mode):
     digits = format_id(account_id).replace(" ", "")
     if has_name:
         if not isinstance(name, str):
-            raise ValueError("Для режима id-name требуется имя.")
+            warnings.warn(
+                "Некорректное имя: ожидалась строка. Имя не будет напечатано.",
+                InvalidNameWarning,
+                stacklevel=2,
+            )
+            return digits, []
         words = normalize_name(name).split()
         if len(words) > 3 or any(len(word) > 11 for word in words):
             warnings.warn(

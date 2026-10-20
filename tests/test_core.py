@@ -4,7 +4,7 @@ import warnings
 from PIL import Image
 from cyberwall_id_printer import (Printer, SyncPrinter, MediaConfig, PaperType,
     LabelConfig, LabelMode, render_label, format_id, normalize_name, PrinterCapabilities,
-    UnsupportedFeature, PrintTransmissionError, ConnectionStateError, NameTruncatedWarning)
+    UnsupportedFeature, PrintTransmissionError, ConnectionStateError, NameTruncatedWarning, InvalidNameWarning)
 from cyberwall_id_printer.layout import render_for_head
 
 
@@ -59,6 +59,25 @@ class RendererTests(unittest.TestCase):
                 self.assertEqual(len(caught), 1)
                 self.assertIs(caught[0].category, NameTruncatedWarning)
                 self.assertEqual(actual.tobytes(), render_label('123456789', expected).tobytes())
+
+    def test_invalid_names_leave_name_cells_unfilled(self):
+        for inactive in (True, False):
+            blank = render_label(config=LabelConfig(mode=LabelMode.BLANK_ID_NAME))
+            reference_id = render_label('123456789', 'РОЗА', LabelConfig(inactive=inactive))
+            for name in (None, 123, 0.5, False, b'NAME', ['РОЗА'], {'name': 'РОЗА'}, object()):
+                with self.subTest(name=name, inactive=inactive):
+                    with warnings.catch_warnings(record=True) as caught:
+                        warnings.simplefilter('always')
+                        image = render_label('123456789', name, LabelConfig(inactive=inactive))
+                    self.assertEqual(len(caught), 1)
+                    self.assertIs(caught[0].category, InvalidNameWarning)
+                    area = (20, 100, 300, 215)
+                    if inactive:
+                        self.assertEqual(image.crop(area).tobytes(), blank.crop(area).tobytes())
+                    else:
+                        self.assertEqual(image.crop(area).getextrema(), (1, 1))
+                    self.assertEqual(image.crop((0, 0, 320, 100)).tobytes(),
+                                     reference_id.crop((0, 0, 320, 100)).tobytes())
 
     def test_name_at_limit_does_not_warn(self):
         with warnings.catch_warnings(record=True) as caught:
@@ -193,6 +212,16 @@ class SessionTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(err.exception.may_have_printed)
             with self.assertRaises(ConnectionStateError): await p.print_id("123456789", "РОЗА")
             self.assertEqual(backend.sends,1)
+
+    async def test_invalid_names_are_sent_despite_warning(self):
+        backend = FakeBackend()
+        async with Printer(backend) as printer:
+            await printer.connect("fake")
+            for name in (None, 123, False, []):
+                with self.subTest(name=name), self.assertWarns(InvalidNameWarning):
+                    result = await printer.print_id("123456789", name)
+                self.assertEqual(result.status, "sent")
+        self.assertEqual(backend.sends, 4)
 
     async def test_long_name_is_sent_despite_warning(self):
         backend = FakeBackend()
