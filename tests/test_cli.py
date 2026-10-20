@@ -25,8 +25,9 @@ class CliTests(unittest.TestCase):
         cases = [[], ['--mode','id-only'],
                  ['--mode','blank-id-only','--id','123456789'],
                  ['--mode','blank-id-name','--no-inactive'],
-                 ['--id','123456789','--name','А Б В Г']]
+                 ['--id','123456789','--name','']]
         with patch('cyberwall_id_printer.cli.TiMiniBackend') as backend, contextlib.redirect_stderr(io.StringIO()):
             for args in cases:
                 self.assertEqual(main(['print','--address','fake',*args]),2)
             backend.assert_not_called()
+

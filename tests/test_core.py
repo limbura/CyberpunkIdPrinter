@@ -1,9 +1,10 @@
 import asyncio
 import unittest
+import warnings
 from PIL import Image
 from cyberwall_id_printer import (Printer, SyncPrinter, MediaConfig, PaperType,
     LabelConfig, LabelMode, render_label, format_id, normalize_name, PrinterCapabilities,
-    UnsupportedFeature, PrintTransmissionError, ConnectionStateError)
+    UnsupportedFeature, PrintTransmissionError, ConnectionStateError, NameTruncatedWarning)
 from cyberwall_id_printer.layout import render_for_head
 
 
@@ -27,8 +28,6 @@ class RendererTests(unittest.TestCase):
 
     def test_content_constraints_and_scaling(self):
         render_label('001002003', 'А'*11+' '+'Б'*11+' '+'Я'*11)
-        for name in ('А Б В Г', 'А'*12):
-            with self.assertRaises(ValueError): render_label('123456789', name)
         for mode in (LabelMode.BLANK_ID_NAME, LabelMode.BLANK_ID_ONLY):
             with self.assertRaises(ValueError): render_label('123456789', config=LabelConfig(mode=mode))
             with self.assertRaises(ValueError): render_label(config=LabelConfig(mode=mode,inactive=False))
@@ -44,6 +43,29 @@ class RendererTests(unittest.TestCase):
                 self.assertEqual(im.mode,'1')
                 self.assertEqual(im.crop((0,0,im.width,5)).convert('L').getextrema(),(255,255))
 
+    def test_long_names_are_truncated_with_one_warning(self):
+        cases = [
+            ('А Б В Г', 'А Б В'),
+            ('А' * 12, 'А' * 11),
+            ('А' * 100, 'А' * 11),
+            ('А' * 12 + ' ' + 'Б' * 12 + ' В Г', 'А' * 11 + ' ' + 'Б' * 11 + ' В'),
+            ('  аааааааааааа\tб в г  ', 'А' * 11 + ' Б В'),
+        ]
+        for name, expected in cases:
+            with self.subTest(name=name):
+                with warnings.catch_warnings(record=True) as caught:
+                    warnings.simplefilter('always')
+                    actual = render_label('123456789', name)
+                self.assertEqual(len(caught), 1)
+                self.assertIs(caught[0].category, NameTruncatedWarning)
+                self.assertEqual(actual.tobytes(), render_label('123456789', expected).tobytes())
+
+    def test_name_at_limit_does_not_warn(self):
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter('always')
+            render_label('123456789', ' '.join(['А' * 11] * 3))
+        self.assertEqual(caught, [])
+
     def test_sample_and_exact_padding(self):
         image = render_label("123456789", "Роза фон Праунхайм")
         self.assertEqual((image.mode, image.size), ("1", (320,240)))
@@ -58,7 +80,7 @@ class RendererTests(unittest.TestCase):
             self.assertEqual(render_label("000000000", ch).mode, "1")
         for value in ("123", "１２３４５６７８９", "123 456 789"):
             with self.assertRaises(ValueError): format_id(value)
-        for name in ("", "А" * 100):
+        for name in ("",):
             with self.assertRaises(ValueError): render_label("123456789", name)
 
     def test_unknown_name_characters_render_as_underscores(self):
@@ -172,6 +194,15 @@ class SessionTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(ConnectionStateError): await p.print_id("123456789", "РОЗА")
             self.assertEqual(backend.sends,1)
 
+    async def test_long_name_is_sent_despite_warning(self):
+        backend = FakeBackend()
+        async with Printer(backend) as printer:
+            await printer.connect("fake")
+            with self.assertWarns(NameTruncatedWarning):
+                result = await printer.print_id("123456789", "А" * 12 + " Б В Г")
+        self.assertEqual(backend.sends, 1)
+        self.assertEqual(result.status, "sent")
+
     async def test_validation_can_be_corrected(self):
         backend = FakeBackend()
         async with Printer(backend) as p:
@@ -208,4 +239,5 @@ class SyncTests(unittest.TestCase):
         self.assertEqual(len(set(backend.loops)),1)
         self.assertTrue(backend.disconnected)
         with self.assertRaises(ConnectionStateError): p.connect("fake")
+
 

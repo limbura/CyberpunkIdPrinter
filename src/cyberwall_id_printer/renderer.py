@@ -6,7 +6,9 @@ from enum import Enum
 from math import hypot, isfinite
 import re
 import unicodedata
+import warnings
 from PIL import Image, ImageDraw
+from .warnings import NameTruncatedWarning
 
 # Normalized segment endpoints. Seven-segment numerals use a..g only.
 SEGMENTS = {
@@ -158,7 +160,13 @@ def validate_content(account_id, name, mode):
             raise ValueError("Для режима id-name требуется имя.")
         words = normalize_name(name).split()
         if len(words) > 3 or any(len(word) > 11 for word in words):
-            raise ValueError("Имя: не более трёх слов, не более 11 символов в каждом.")
+            warnings.warn(
+                "В имени более трёх слов или есть слова более 11 символов — "
+                "не помещающиеся символы и слова обрезаны.",
+                NameTruncatedWarning,
+                stacklevel=2,
+            )
+            words = [word[:11] for word in words[:3]]
     else:
         if name is not None:
             raise ValueError("Для режима id-only не передавайте имя.")
@@ -266,4 +274,5 @@ def render_label(account_id: str|int|None = None, name: str|None = None,
             for col in range(11):
                 cell(word[col] if col < len(word) else '',26+col*25,113+row*37,18,25)
     return image
+
 
