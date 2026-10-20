@@ -88,7 +88,13 @@ def format_id(value: str | int) -> str:
 def normalize_name(name: str) -> str:
     result = ' '.join(unicodedata.normalize('NFC', name).upper().split())
     if not result:
-        raise ValueError('Имя не должно быть пустым.')
+        warnings.warn(
+            "Имя пустое или состоит только из пробельных символов. "
+            "Имя не будет напечатано.",
+            InvalidNameWarning,
+            stacklevel=2,
+        )
+        return ""
     return ''.join(char if char == ' ' or char in GLYPHS else '_' for char in result)
 
 

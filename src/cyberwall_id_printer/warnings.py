@@ -6,4 +6,4 @@ class NameTruncatedWarning(UserWarning):
 
 
 class InvalidNameWarning(UserWarning):
-    """A missing or non-string name was omitted from the label."""
+    """A missing, non-string or whitespace-only name was omitted from the label."""

@@ -64,7 +64,7 @@ class RendererTests(unittest.TestCase):
         for inactive in (True, False):
             blank = render_label(config=LabelConfig(mode=LabelMode.BLANK_ID_NAME))
             reference_id = render_label('123456789', 'РОЗА', LabelConfig(inactive=inactive))
-            for name in (None, 123, 0.5, False, b'NAME', ['РОЗА'], {'name': 'РОЗА'}, object()):
+            for name in ('', '   ', '\t\n', '\u00a0\u2003', None, 123, 0.5, False, b'NAME', ['РОЗА'], {'name': 'РОЗА'}, object()):
                 with self.subTest(name=name, inactive=inactive):
                     with warnings.catch_warnings(record=True) as caught:
                         warnings.simplefilter('always')
@@ -99,8 +99,9 @@ class RendererTests(unittest.TestCase):
             self.assertEqual(render_label("000000000", ch).mode, "1")
         for value in ("123", "１２３４５６７８９", "123 456 789"):
             with self.assertRaises(ValueError): format_id(value)
-        for name in ("",):
-            with self.assertRaises(ValueError): render_label("123456789", name)
+        for name in ("", "   ", "\t\n", "\u00a0\u2003"):
+            with self.subTest(name=name), self.assertWarns(InvalidNameWarning):
+                self.assertEqual(normalize_name(name), "")
 
     def test_unknown_name_characters_render_as_underscores(self):
         for name, expected in [('Роза "Лис"', 'РОЗА _ЛИС_'),
@@ -217,11 +218,11 @@ class SessionTests(unittest.IsolatedAsyncioTestCase):
         backend = FakeBackend()
         async with Printer(backend) as printer:
             await printer.connect("fake")
-            for name in (None, 123, False, []):
+            for name in (None, 123, False, [], "", "   ", "\t\n", "\u00a0\u2003"):
                 with self.subTest(name=name), self.assertWarns(InvalidNameWarning):
                     result = await printer.print_id("123456789", name)
                 self.assertEqual(result.status, "sent")
-        self.assertEqual(backend.sends, 4)
+        self.assertEqual(backend.sends, 8)
 
     async def test_long_name_is_sent_despite_warning(self):
         backend = FakeBackend()
