@@ -275,14 +275,6 @@ def render_label(account_id: str|int|None = None, name: str|None = None,
                 # Semantic ID marker remains on the blank template as well.
                 marker = ('bc','bcdeg')[col] if row == 1 and col < 2 else None
                 cell(char,25+col*47,24+row*66,35,58,True,marker)
-        if config.decorations:
-            for row, count in enumerate((1,2,3)):
-                for j in range(count):
-                    y = 46+row*66+j*6
-                    rule([(14,y),(19,y)])
-                    rule([(301,y),(306,y)])
-            _micro_text(draw,'ID / 01',245,18,sx,sy)
-            _micro_text(draw,'ID / 03',245,219,sx,sy)
     else:
         for i in range(9):
             cell(digits[i] if digits else '',25+i*28+(i//3)*10,31,20,49,True)
@@ -292,6 +284,16 @@ def render_label(account_id: str|int|None = None, name: str|None = None,
             word = words[row] if row < len(words) else ''
             for col in range(11):
                 cell(word[col] if col < len(word) else '',26+col*25,113+row*37,18,25)
+    if config.decorations:
+        for row, count in enumerate((1,2,3)):
+            for j in range(count):
+                y = 46+row*66+j*6
+                rule([(14,y),(19,y)])
+                rule([(301,y),(306,y)])
+        # Keep the five-pixel captions outside the segment area, including
+        # stroke thickness and Cyrillic descenders (base canvas: 320 x 240).
+        _micro_text(draw,'ID / 01',245,14,sx,sy)
+        _micro_text(draw,'ID / 03',245,222,sx,sy)
     return image
 
 
