@@ -8,7 +8,7 @@ from .backends import TiMiniBackend, PrinterBackend
 from .errors import (PrinterError, BackendUnavailable, UnsupportedFeature,
                      ConnectionStateError, PrintTransmissionError, DeviceStatusError)
 
-__version__ = "1.2.0"
+__version__ = "1.2.1"
 __all__ = ["UnsupportedNameCharactersWarning", "InvalidNameWarning", "NameTruncatedWarning", "LabelConfig", "LabelMode", "render_label", "format_id", "normalize_name", "MediaConfig",
            "PaperType", "PrinterCapabilities", "PrintResult", "Printer", "SyncPrinter",
            "TiMiniBackend", "PrinterBackend", "PrinterError", "BackendUnavailable",

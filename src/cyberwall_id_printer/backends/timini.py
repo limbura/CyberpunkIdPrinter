@@ -76,6 +76,34 @@ def _imports(path):
         raise BackendUnavailable('Install cyberwall_id_printer[printer] in this environment') from exc
 
 
+async def _scan_ble_devices(discovery, timeout):
+    """Scan on the caller's loop, then let TiMini resolve the model catalog.
+
+    TiMini's async scan_devices() delegates to a blocking worker which creates
+    and immediately closes its own event loop. A late WinRT scanner callback
+    can then target that closed loop. Await Bleak directly instead; the caller
+    owns the loop and cancellation also waits for Bleak's scanner cleanup.
+    """
+    from bleak import BleakScanner
+    from timiniprint.transport.bluetooth.types import DeviceInfo, DeviceTransport
+
+    advertisements = await BleakScanner.discover(timeout=timeout, return_adv=True)
+    endpoints, ble_devices = [], {}
+    for device, advertisement in advertisements.values():
+        ble_devices[device.address.casefold()] = device
+        endpoints.append(DeviceInfo(
+            name=advertisement.local_name or device.name or "",
+            address=device.address,
+            paired=None,
+            transport=DeviceTransport.BLE,
+            manufacturer_data=tuple(
+                company.to_bytes(2, "little") + bytes(value)
+                for company, value in advertisement.manufacturer_data.items()
+            ),
+        ))
+    return discovery.devices_from_scan(endpoints), ble_devices
+
+
 def capabilities_for(device) -> PrinterCapabilities:
     family = device.protocol_family.value
     if family not in ("v5g", "v5x"):
@@ -134,7 +162,7 @@ class TiMiniBackend:
 
     async def scan(self) -> list[dict[str, str]]:
         Catalog, Discovery, _, _, _ = _imports(self.path)
-        devices = await Discovery(Catalog.load()).scan_devices(timeout=self.scan_timeout, include_classic=False)
+        devices, _ = await _scan_ble_devices(Discovery(Catalog.load()), self.scan_timeout)
         return [{"name": d.name, "address": d.address, "profile": d.profile_key} for d in devices]
 
     async def connect(self, address: str) -> PrinterCapabilities:
@@ -175,6 +203,7 @@ class TiMiniBackend:
         started = time.monotonic()
         found = None
         target_name = None
+        ble_devices = {}
 
         def target_with_name(device, advertisement):
             nonlocal target_name
@@ -200,19 +229,21 @@ class TiMiniBackend:
                 "Targeted BLE discovery failed (%s); using regular discovery", exc)
         if not devices:
             # Some platforms omit names from advertisements, preventing the
-            # model catalog from resolving a single endpoint. Keep TiMini's
-            # normal discovery for that case.
-            devices = await discovery.scan_devices(timeout=self.scan_timeout, include_classic=False)
+            # model catalog from resolving a single endpoint. Run a full scan
+            # on this same loop, preserving manufacturer data for resolution.
+            devices, ble_devices = await _scan_ble_devices(discovery, self.scan_timeout)
         if not devices:
             raise RuntimeError("No supported printers found")
         device = BluetoothEndpointResolver(catalog).select_device(devices, address)
         if device is None:
             raise RuntimeError(f"No device matches '{address}'")
+        if ble_devices:
+            found = ble_devices.get(device.address.casefold())
         capabilities_for(device)  # Refuse unsupported families before device initialization.
         from .ble_connector import connector_with_timeout
         options = self._connection_options(device)
-        # Reuse the Windows BLEDevice in TiMini's private BLE event loop to
-        # avoid its redundant five-second scan; never reuse it on macOS.
+        # Reuse either scan's Windows BLEDevice in TiMini's private connection
+        # loop to avoid another scan there; never reuse it on macOS.
         import sys
         cached = found if found is not None and devices and sys.platform == "win32" else None
         connector = connector_with_timeout(self.timeout, ble_device=cached)

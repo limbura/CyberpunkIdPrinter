@@ -68,15 +68,9 @@ class TiMiniTests(unittest.TestCase):
         from unittest.mock import AsyncMock, Mock
         from cyberwall_id_printer import TiMiniBackend
         from timiniprint.devices import bluetooth_connection_plan
-        from timiniprint.transport.bluetooth import DeviceTransport
-        from timiniprint.transport.bluetooth.types import DeviceInfo
         from timiniprint.devices.device import BluetoothEndpointTransport
 
         address = "AA:BB:CC:DD:EE:FF"
-        endpoint = DeviceInfo(name="MX10", address=address, transport=DeviceTransport.BLE)
-        ble = Mock()
-        # Simulate a printer which is not discovered within the old 5s window.
-        ble.scan_blocking.side_effect = lambda timeout: [endpoint] if timeout >= 15 else []
         connected = Mock()
         connected.disconnect = AsyncMock()
 
@@ -85,6 +79,11 @@ class TiMiniTests(unittest.TestCase):
             return connected
 
         ble_device = SimpleNamespace(address=address, name=None)
+
+        async def discover(*, timeout, return_adv):
+            self.assertEqual(timeout, 15)
+            self.assertTrue(return_adv)
+            return {address: (ble_device, SimpleNamespace(local_name="MX10", manufacturer_data={}))}
 
         async def find_device(predicate, *, timeout):
             self.assertEqual(timeout, 15)
@@ -109,14 +108,17 @@ class TiMiniTests(unittest.TestCase):
 
         with patch("timiniprint.transport.bluetooth.backend._get_classic_adapter",
                    side_effect=AssertionError("Classic must not be used")) as classic, \
-             patch("timiniprint.transport.bluetooth.backend._get_ble_adapter", return_value=ble), \
+             patch("timiniprint.transport.bluetooth.BluetoothDiscovery.scan_devices",
+                   side_effect=AssertionError("TiMini must not own the scan loop")) as legacy_scan, \
+             patch("bleak.BleakScanner.discover", side_effect=discover) as full_scan, \
              patch("timiniprint.printing.connected.connect_printer", side_effect=connect), \
              patch("bleak.BleakScanner.find_device_by_filter",
                    new=AsyncMock(side_effect=find_device)) as targeted_scan:
             asyncio.run(scenario())
             classic.assert_not_called()
             targeted_scan.assert_awaited_once()
-            ble.scan_blocking.assert_called_once()
+            full_scan.assert_awaited_once()
+            legacy_scan.assert_not_called()
 
     def test_actual_batch_keeps_page_metadata_and_protocol_steps(self):
         from unittest.mock import Mock
