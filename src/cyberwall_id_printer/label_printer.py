@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from enum import Enum
 from math import isfinite
 from .errors import PrinterError, ConnectionStateError, DeviceStatusError
-from .models import MediaConfig, PaperType, PrintResult
+from .models import MediaConfig, PaperType, PrintResult, validate_copies
 from .renderer import LabelMode
 from .layout import render_for_head
 
@@ -32,15 +32,18 @@ class LabelSettings:
     position_timeout: float = 20.0
     settle_seconds: float = 3.0
     motion_settle_seconds: float = 5.0
+    gap_mm: float = 2.0
 
     def __post_init__(self):
         object.__setattr__(self, 'confirmation', RemovalConfirmation(self.confirmation))
-        for key in ('feed_mm', 'retract_mm', 'position_timeout', 'settle_seconds', 'motion_settle_seconds'):
+        for key in ('feed_mm', 'retract_mm', 'gap_mm', 'position_timeout', 'settle_seconds', 'motion_settle_seconds'):
             value = getattr(self, key)
             if isinstance(value, bool) or not isfinite(value) or value <= 0:
                 raise ValueError(f'{key} must be finite and positive')
         if not 0.25 <= self.feed_mm <= 25 or not 0.25 <= self.retract_mm <= 25:
             raise ValueError('Tested feed/retract range is 0.25–25 mm')
+        if not 0.25 <= self.gap_mm <= 25:
+            raise ValueError('gap_mm must be within 0.25–25 mm')
         if self.settle_seconds < 2 or self.motion_settle_seconds < 2:
             raise ValueError('settle_seconds must be at least 2 (completion is not acknowledged)')
 
@@ -54,7 +57,7 @@ class LabelOperationError(PrinterError):
         self.reason = getattr(cause, "reason", None)
         self.status = getattr(cause, "status", None)
         self.stage = stage
-        self.may_have_printed = stage in ('printing', 'presenting')
+        self.may_have_printed = stage in ('printing', 'advancing', 'presenting')
         super().__init__(f'Label operation failed at {stage}; position unknown; no retry performed')
 
 
@@ -248,6 +251,16 @@ class LabelPrinter:
             raise RemovalRequired('Remove all exposed labels, close cover, confirm removal; then submit print again')
 
     async def print_image(self, image):
+        """Print one label using the usual positioning and presentation cycle."""
+        return await self.print_copies(image, copies=1)
+
+    async def print_copies(self, image, copies):
+        """Print 1–100 identical labels; position once and present after the last.
+
+        Between copies, advance by gap_mm and wait motion_settle_seconds.
+        A failure stops the entire series; no remaining copies are retained.
+        """
+        validate_copies(copies)
         self._check_loop()
         # Freeze and validate user input before any motion.
         image = image.copy()
@@ -279,11 +292,23 @@ class LabelPrinter:
                     stage = 'positioning'
                     await self._position()
                 self._confirmed = False
-                stage = 'printing'
-                log.info("PRINT_ATTEMPT #%s raster_phase start elapsed=%.3fs", attempt, time.monotonic() - started)
-                self._event(stage)
-                await self._backend.print_image(image, self.settings.settle_seconds)
-                log.info("PRINT_ATTEMPT #%s raster_phase done elapsed=%.3fs", attempt, time.monotonic() - started)
+                for copy_index in range(1, copies + 1):
+                    stage = 'printing'
+                    log.info("PRINT_ATTEMPT #%s copy=%s/%s raster_phase start elapsed=%.3fs",
+                             attempt, copy_index, copies, time.monotonic() - started)
+                    self._event(stage)
+                    await self._backend.print_image(image, self.settings.settle_seconds)
+                    log.info("PRINT_ATTEMPT #%s copy=%s/%s raster_phase done elapsed=%.3fs",
+                             attempt, copy_index, copies, time.monotonic() - started)
+                    if copy_index < copies:
+                        stage = 'advancing'
+                        self._event(stage)
+                        epoch = self._epoch
+                        await self._backend.move(self.settings.gap_mm, reverse=False,
+                                                 settle=self.settings.motion_settle_seconds)
+                        await self._status()
+                        if self._epoch != epoch:
+                            raise PrinterError('Printer condition changed between copies')
                 stage = 'presenting'
                 self._event(stage)
                 epoch = self._epoch
@@ -295,7 +320,7 @@ class LabelPrinter:
                 self.state = LabelState.PRESENTED
                 self._event('presented')
                 log.info("PRINT_ATTEMPT #%s success elapsed=%.3fs", attempt, time.monotonic() - started)
-                return PrintResult(image.width, image.height)
+                return PrintResult(image.width, image.height, copies=copies)
             except RemovalRequired:
                 log.info("PRINT_ATTEMPT #%s removal_required stage=%s elapsed=%.3fs", attempt, stage, time.monotonic() - started)
                 raise
@@ -313,9 +338,10 @@ class LabelPrinter:
                 self.last_error = LabelOperationError(stage, exc)
                 raise self.last_error from exc
 
-    async def print_id(self, account_id=None, name=None, *, mode=LabelMode.ID_NAME):
+    async def print_id(self, account_id=None, name=None, *, mode=LabelMode.ID_NAME, copies=1):
+        validate_copies(copies)
         image = render_for_head(account_id, name, self.media, 384, mode=mode)
-        return await self.print_image(image)
+        return await self.print_copies(image, copies=copies)
 
     async def disconnect(self):
         self._check_loop()
