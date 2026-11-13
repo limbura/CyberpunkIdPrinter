@@ -30,11 +30,12 @@ jobs:
           repository: limbura/CyberpunkMasterManager
           ref: ${{ inputs.manager_ref || 'master' }}
           path: CyberpunkMasterManager
-      - uses: actions/checkout@v4
+      - name: Get latest stable wcopy_reader release
+        id: reader_release
+        uses: ./CyberpunkMasterManager/.github/actions/reader-release
         with:
-          repository: limbura/CyberpunkPcRfidReader
-          ref: d51466c2ac952eac8307366b3059fa0e7bb12282
-          path: CyberpunkPcRfidReader
+          token: ${{ github.token }}
+          minimum-version: '1.7.0'
       - uses: actions/checkout@v4
         with:
           repository: Dejniel/TiMini-Print
