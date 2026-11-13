@@ -420,22 +420,56 @@ BLE-профиль этой ревизии не ожидает их перед �
 (без I/O) и `check_connection()` (async). Старый backend продолжает поддерживать
 одиночную печать; неподдерживаемая серия/проверка связи выдаёт `UnsupportedFeature`.
 
-## Автономная сборка Master Manager
+## Релизы библиотеки
 
-Начиная с 0.3.1 адаптер поддерживает встроенный TiMini внутри PyInstaller EXE.
-В исходниках по-прежнему используется отдельный чистый checkout; копии TiMini
-в этом репозитории нет. Сборщик проверяет Git-ревизию, включает runtime-модули,
-JSON-каталог, зависимости и лицензии и записывает `cyberwall_timini.json`.
-В EXE адаптер читает этот манифест и загружает только встроенный модуль.
-Git, Python, pip и отдельный checkout на целевом ПК не нужны.
+Релизы **самой библиотеки** `cyberwall_id_printer` публикуются автоматически
+через [GitHub Actions](.github/workflows/release.yml) при отправке нового тега
+вида `vX.Y.Z`. Тег должен соответствовать строке `__version__` из
+`src/cyberwall_id_printer/__init__.py`, а отмеченный коммит — находиться в
+истории `main`. Перед публикацией запускаются тесты на Linux и Windows,
+проверяются зависимости и доступность backend TiMini.
 
-Полный Windows ZIP собирается workflow **Windows standalone manager** в этом
-репозитории: **Actions → Windows standalone manager → Run workflow**.
-`manager_ref` — ветка или коммит CyberpunkMasterManager, по умолчанию `master`.
-Результат находится в Artifacts → `cyberwall-master-manager-windows-x64`.
-Workflow расположен здесь, поскольку библиотека приватная; дополнительный токен
-для доступа из другого репозитория не требуется. Код Master Manager и TiMini
-получается при сборке, не копируется в исходники библиотеки.
+В GitHub Release размещаются:
+
+- `cyberwall_id_printer_vX.Y.Z.zip` — **исходники устанавливаемого Python-пакета**:
+  `pyproject.toml`, каталог `src/cyberwall_id_printer/`, README, примеры
+  и документация (включая изображения);
+- `cyberwall_id_printer_vX.Y.Z.sha256` — контрольная сумма ZIP.
+
+В ZIP нет тестов, служебных скриптов, Master Manager и исходников
+**внешней зависимости TiMini-Print**. Это не готовая Windows-программа: после
+распаковки библиотеку устанавливают через `python -m pip install .`
+(или `python -m pip install ".[printer]"` для поддержки принтера).
+Для связи с TiMini также необходим отдельный checkout, описанный выше.
+
+Номер версии изменяется в `__init__.py`. Например, для текущей версии 1.3.0
+после её проверки и фиксации изменений:
+
+```console
+git switch main
+git pull --ff-only origin main
+git tag v1.3.0
+git push origin v1.3.0
+```
+
+Если такой тег уже существует, его не создают повторно. Для новых выпусков
+используйте новый номер версии. Локально проверить сборку ZIP без публикации:
+
+```console
+python scripts/build_release.py --tag v1.3.0
+```
+
+Готовые файлы появятся в `dist/`. Обычный push в `main` **не создаёт релиз**.
+
+## Использование в Master Manager
+
+При автономной сборке [CyberpunkMasterManager](https://github.com/limbura/CyberpunkMasterManager)
+библиотека принтера и необходимый runtime TiMini встраиваются в Windows EXE.
+Сборка полного приложения и публикация его релизов выполняются **в репозитории
+Master Manager**, а не в этом репозитории библиотеки. Исходники TiMini должны
+быть взяты на совместимой закреплённой ревизии; в самом Python-пакете их нет.
+На компьютере, запускающем уже собранный EXE, Python и отдельный checkout
+TiMini не требуются.
 
 ## Экспериментальные отдельные стикеры (0.4.0)
 
