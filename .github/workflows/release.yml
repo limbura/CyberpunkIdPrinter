@@ -40,7 +40,8 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
       - name: Install printer dependencies
-        run: python -m pip install --only-binary=:all: './CyberpunkIdPrinter[printer]'
+        run: |
+          python -m pip install --only-binary=:all: './CyberpunkIdPrinter[printer]'
       - name: Check installed dependencies and backend
         run: |
           python -m pip check
